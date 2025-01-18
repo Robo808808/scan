@@ -11,6 +11,6 @@ def scan_ports(host, port_range):
     return open_ports
 
 if __name__ == "__main__":
-    target_host = "192.168.1.100"  # Replace with the target server's IP
-    ports = scan_ports(target_host, (1, 1024))  # Scan ports 1-1024
+    target_host = "localhost"  # Replace with the target server's IP
+    ports = scan_ports(target_host, (20, 30))  # Scan ports 1-1024
     print(f"Open ports on {target_host}: {ports}")
