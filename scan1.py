@@ -1,4 +1,4 @@
-import python-nmap
+import nmap
 
 def scan_ports_with_tls_detection(host, port_range):
     """
