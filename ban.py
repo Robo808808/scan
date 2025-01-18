@@ -21,6 +21,6 @@ def find_oracle_listener(host, port_range):
     return None
 
 if __name__ == "__main__":
-    server = "192.168.1.100"  # Replace with the server IP
+    server = "localhost"  # Replace with the server IP
     port_range = (1521, 1530)  # Typical Oracle listener port range
     find_oracle_listener(server, port_range)

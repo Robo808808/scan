@@ -61,7 +61,7 @@ def sniff_remote_ports(host, username, password=None, key_file=None):
 
 if __name__ == "__main__":
     # Example usage
-    remote_host = "192.168.1.100"  # Replace with the remote server's IP or hostname
+    remote_host = "localhost"  # Replace with the remote server's IP or hostname
     username = "your_username"
     password = "your_password"  # Use None if using key-based authentication
     key_file = None  # Provide the path to your SSH private key if applicable
