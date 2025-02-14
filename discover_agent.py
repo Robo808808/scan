@@ -6,13 +6,13 @@ import json
 def find_java_pid():
     """Automatically find the PID of a Java process listening on a TCP6 port."""
     try:
-        result = subprocess.run(["netstat", "-tulnp"], stdout=subprocess.PIPE, universal_newlines=True)
+        result = subprocess.run(["netstat", "-tulnp"], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                                universal_newlines=True)
         for line in result.stdout.splitlines():
             if "java" in line and "tcp6" in line and "LISTEN" in line:
                 parts = line.split()
                 pid_process = parts[-1]  # Example: "1234/java"
                 pid = pid_process.split("/")[0]
-                print(f"Found Java process listening on TCP6 with PID: {pid}")
                 return pid
     except Exception as e:
         print(f"Error finding Java process: {e}")
@@ -27,7 +27,6 @@ def find_agent_home(pid):
             real_path = os.readlink(cwd_path)
             if real_path.endswith("/sysman/emd"):
                 agent_home = real_path[:-len("/sysman/emd")]
-                print(f"Agent home found: {agent_home}")
                 return agent_home
     except Exception as e:
         print(f"Error accessing {cwd_path}: {e}")
@@ -53,8 +52,6 @@ def get_agent_info(agent_home):
                         agent_info["agent_binaries"] = line.split(":")[-1].strip()
                     elif "Agent Version" in line:
                         agent_info["agent_version"] = line.split(":")[-1].strip()
-            else:
-                print(f"emctl status agent failed: {result.stderr}")
         else:
             print(f"{emctl_path} not found.")
     except Exception as e:
@@ -69,12 +66,11 @@ def main():
         agent_home = find_agent_home(pid)
         if agent_home:
             agent_info = get_agent_info(agent_home)
-            print("\n--- Agent Info JSON ---")
             print(json.dumps(agent_info, indent=4))
         else:
-            print("Agent home could not be found.")
+            print(json.dumps({"error": "Agent home could not be found"}, indent=4))
     else:
-        print("No suitable Java process found.")
+        print(json.dumps({"error": "No suitable Java process found"}, indent=4))
 
 
 if __name__ == "__main__":
