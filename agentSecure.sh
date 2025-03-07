@@ -16,7 +16,7 @@ CWD_PATH="/proc/$PID/cwd"
 if [[ -L "$CWD_PATH" ]]; then
     FULL_CWD=$(ls -l "$CWD_PATH" | awk '{print $NF}')
     # Extract the base path up to and including "agent_inst" or "agent_13.x.x.x.x"
-    BASE_CWD=$(echo "$FULL_CWD" | sed -E 's|(.*?/agent_(inst|[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+)).*|\1|')
+    BASE_CWD=$(echo "$FULL_CWD" | sed -E 's|(.*?/agent_(inst|[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+)).*|\1|')
     echo "Base working directory for PID $PID: $BASE_CWD"
 else
     echo "Unable to determine working directory."
