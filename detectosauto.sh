@@ -132,6 +132,32 @@ detect_oracle_service() {
 }
 
 
+# Example usage:
+#
+# Auto-detect:
+# result=($(detect_oracle_service))
+# management_system=${result[0]}
+# service_name=${result[1]}
+# systemd_unit=${result[2]}  # Only if management_system is "initd_via_systemd"
+#
+# Or with a provided service name:
+# result=($(detect_oracle_service "oracle"))
+# management_system=${result[0]}
+# service_name=${result[1]}
+# systemd_unit=${result[2]}  # Only if management_system is "initd_via_systemd"
+#
+# if [ "$management_system" = "unknown" ]; then
+#     echo "Could not detect Oracle service"
+#     exit 1
+# fi
+#
+# echo "Management system: $management_system"
+# echo "Service name: $service_name"
+# if [ "$management_system" = "initd_via_systemd" ]; then
+#     echo "Systemd unit: $systemd_unit"
+# fi
+
+
 # Function to check if a service is managed by systemd
 is_systemd_service() {
     local service_name="$1"
