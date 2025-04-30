@@ -4,70 +4,126 @@
 # Returns two values:
 # 1. Management system (systemd, initd, or unknown)
 # 2. Service unit name (or empty if unknown)
+#!/bin/bash
+
+# Function to detect Oracle database service management method
+# Returns:
+# management_system: systemd, initd, initd_via_systemd, or unknown
+# service_name: The service name or script name
 detect_oracle_service() {
-    local management_type=""
+    local management_system="unknown"
     local service_name=""
+    local systemd_unit=""
 
-    # Find Oracle PMON processes
-    local ORA_PIDS=$(pgrep -f ora_pmon)
+    # Check if a service name was provided as argument
+    local provided_service="$1"
 
-    if [ -z "$ORA_PIDS" ]; then
-        echo "unknown" ""
-        return 1
-    fi
+    if [ -n "$provided_service" ]; then
+        # User provided a service name, check if it exists in systemd
+        if systemctl list-unit-files "$provided_service"* &>/dev/null; then
+            # Check if this systemd service is wrapping an init.d script
+            local initd_script=$(systemctl status "$provided_service" 2>/dev/null |
+                              grep -E 'ExecStart=.*(/etc/rc\.d/init\.d/|/etc/init\.d/)' |
+                              sed -E 's/.*ExecStart=.*\/(etc\/rc\.d\/init\.d\/|etc\/init\.d\/)([^ ]*).*/\2/')
 
-    # Take the first PMON process found (usually one per database instance)
-    local pid=$(echo "$ORA_PIDS" | head -1)
-
-    # Check if process is managed by systemd
-    if systemctl status $pid &>/dev/null; then
-        management_type="systemd"
-        service_name=$(systemctl status $pid --no-pager | grep -o '[^ ]*\.service' | head -1)
-        # Remove any potential control characters
-        service_name=$(echo "$service_name" | tr -d '[:cntrl:]')
+            if [ -n "$initd_script" ]; then
+                management_system="initd_via_systemd"
+                service_name="$initd_script"
+                systemd_unit="$provided_service"
+            else
+                management_system="systemd"
+                service_name="$provided_service"
+            fi
+        elif [ -f "/etc/init.d/$provided_service" ]; then
+            management_system="initd"
+            service_name="$provided_service"
+        else
+            # Service not found with the provided name
+            return 1
+        fi
     else
-        # Check if managed by init.d
-        local ppid=$(ps -o ppid= -p $pid | tr -d ' ')
+        # Auto-detect based on running Oracle processes
+        local ORA_PID=$(pgrep -f ora_pmon | head -1)
 
-        # Trace parent process to see if it leads to an init script
-        while [ "$ppid" != "1" ] && [ -n "$ppid" ]; do
-            local cmd=$(ps -o cmd= -p $ppid 2>/dev/null)
-            if [[ "$cmd" == *"/etc/init.d/"* ]]; then
-                management_type="initd"
-                service_name=$(echo "$cmd" | grep -o '/etc/init.d/[^ ]*' | sed 's/.*\/etc\/init.d\///')
-                break
-            fi
-            ppid=$(ps -o ppid= -p $ppid 2>/dev/null | tr -d ' ')
-            # Safety check to avoid infinite loops
-            if [ -z "$ppid" ]; then
-                break
-            fi
-        done
+        if [ -z "$ORA_PID" ]; then
+            # No Oracle processes found
+            return 1
+        fi
 
-        # If still not found, check if any init.d scripts are running
-        if [ -z "$management_type" ]; then
-            # Look for common Oracle init script names
-            for script in $(find /etc/init.d -type f | grep -i ora); do
-                if [ -x "$script" ]; then
-                    # Check if this script is related to the running process
-                    script_name=$(basename "$script")
-                    if ps -ef | grep -v grep | grep -q "$script_name"; then
-                        management_type="initd"
-                        service_name="$script_name"
-                        break
-                    fi
+        # Check if process is managed by systemd
+        if systemctl status "$ORA_PID" &>/dev/null; then
+            # Get systemd unit name
+            systemd_unit=$(systemctl status "$ORA_PID" --no-pager 2>/dev/null |
+                        grep -o '[^ ]*\.service' | head -1 | tr -d '[:cntrl:]')
+
+            # Check if this systemd service is wrapping an init.d script
+            local initd_script=$(systemctl status "$ORA_PID" 2>/dev/null |
+                              grep -E 'ExecStart=.*(/etc/rc\.d/init\.d/|/etc/init\.d/)' |
+                              sed -E 's/.*ExecStart=.*\/(etc\/rc\.d\/init\.d\/|etc\/init\.d\/)([^ ]*).*/\2/')
+
+            if [ -n "$initd_script" ]; then
+                management_system="initd_via_systemd"
+                service_name="$initd_script"
+            else
+                management_system="systemd"
+                service_name="$systemd_unit"
+            fi
+        else
+            # Check if managed by init.d
+            local ppid=$(ps -o ppid= -p "$ORA_PID" | tr -d ' ')
+
+            # Trace parent process to see if it leads to an init script
+            while [ "$ppid" != "1" ] && [ -n "$ppid" ]; do
+                local cmd=$(ps -o cmd= -p "$ppid" 2>/dev/null)
+                if [[ "$cmd" == *"/etc/init.d/"* ]]; then
+                    management_system="initd"
+                    service_name=$(echo "$cmd" | grep -o '/etc/init.d/[^ ]*' | sed 's/.*\/etc\/init.d\///')
+                    break
+                fi
+                ppid=$(ps -o ppid= -p "$ppid" 2>/dev/null | tr -d ' ')
+                # Safety check to avoid infinite loops
+                if [ -z "$ppid" ]; then
+                    break
                 fi
             done
+
+            # If still not found, check if any init.d scripts are running
+            if [ "$management_system" = "unknown" ]; then
+                # Look for common Oracle init script names
+                for script in $(find /etc/init.d -type f | grep -i ora); do
+                    if [ -x "$script" ]; then
+                        # Check if this script is related to the running process
+                        script_name=$(basename "$script")
+                        if ps -ef | grep -v grep | grep -q "$script_name"; then
+                            management_system="initd"
+                            service_name="$script_name"
+                            break
+                        fi
+                    fi
+                done
+            fi
         fi
     fi
 
-    # If still not determined, mark as unknown
-    if [ -z "$management_type" ]; then
-        management_type="unknown"
-    fi
-
-    # Return results
-    echo "$management_type" "$service_name"
+    # Return results based on the management system
+    case "$management_system" in
+        "systemd")
+            echo "systemd" "$service_name"
+            return 0
+            ;;
+        "initd")
+            echo "initd" "$service_name"
+            return 0
+            ;;
+        "initd_via_systemd")
+            echo "initd_via_systemd" "$service_name" "$systemd_unit"
+            return 0
+            ;;
+        *)
+            echo "unknown" ""
+            return 1
+            ;;
+    esac
 }
 
 # Function to check if a service is managed by systemd
