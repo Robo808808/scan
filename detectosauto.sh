@@ -1,12 +1,6 @@
 #!/bin/bash
 
 # Function to detect Oracle database service management method
-# Returns two values:
-# 1. Management system (systemd, initd, or unknown)
-# 2. Service unit name (or empty if unknown)
-#!/bin/bash
-
-# Function to detect Oracle database service management method
 # Returns:
 # management_system: systemd, initd, initd_via_systemd, or unknown
 # service_name: The service name or script name
@@ -21,15 +15,20 @@ detect_oracle_service() {
     if [ -n "$provided_service" ]; then
         # User provided a service name, check if it exists in systemd
         if systemctl list-unit-files "$provided_service"* &>/dev/null; then
-            # Check if this systemd service is wrapping an init.d script
-            local initd_script=$(systemctl status "$provided_service" 2>/dev/null |
-                              grep -E 'ExecStart=.*(/etc/rc\.d/init\.d/|/etc/init\.d/)' |
-                              sed -E 's/.*ExecStart=.*\/(etc\/rc\.d\/init\.d\/|etc\/init\.d\/)([^ ]*).*/\2/')
+            # Get the systemd unit name
+            systemd_unit="$provided_service"
 
-            if [ -n "$initd_script" ]; then
+            # Check if this systemd service is wrapping an init.d script
+            local status_output=$(systemctl status "$provided_service" 2>/dev/null)
+
+            # Check if the systemd unit is loaded from an init.d script
+            if echo "$status_output" | grep -q -E "Loaded: loaded \(/etc/(rc\.d/)?init\.d/"; then
+                local initd_script=$(echo "$status_output" |
+                                  grep -E "Loaded: loaded \(/etc/(rc\.d/)?init\.d/" |
+                                  sed -E 's/.*Loaded: loaded \(\/etc\/(rc\.d\/)?init\.d\/([^;]+).*/\3/')
+
                 management_system="initd_via_systemd"
                 service_name="$initd_script"
-                systemd_unit="$provided_service"
             else
                 management_system="systemd"
                 service_name="$provided_service"
@@ -52,16 +51,22 @@ detect_oracle_service() {
 
         # Check if process is managed by systemd
         if systemctl status "$ORA_PID" &>/dev/null; then
-            # Get systemd unit name
-            systemd_unit=$(systemctl status "$ORA_PID" --no-pager 2>/dev/null |
-                        grep -o '[^ ]*\.service' | head -1 | tr -d '[:cntrl:]')
+            # Get systemd unit name - first try the standard method
+            local status_output=$(systemctl status "$ORA_PID" --no-pager 2>/dev/null)
+            systemd_unit=$(echo "$status_output" | grep -o '[^ ]*\.service' | head -1 | tr -d '[:cntrl:]')
 
-            # Check if this systemd service is wrapping an init.d script
-            local initd_script=$(systemctl status "$ORA_PID" 2>/dev/null |
-                              grep -E 'ExecStart=.*(/etc/rc\.d/init\.d/|/etc/init\.d/)' |
-                              sed -E 's/.*ExecStart=.*\/(etc\/rc\.d\/init\.d\/|etc\/init\.d\/)([^ ]*).*/\2/')
+            # If no unit name found, try alternative method to get the unit name
+            if [ -z "$systemd_unit" ]; then
+                systemd_unit=$(systemctl status "$ORA_PID" --no-pager 2>/dev/null |
+                            grep -E '^[[:space:]]*●' | sed -E 's/^[[:space:]]*●[[:space:]]+([^[:space:]]+).*/\1/')
+            fi
 
-            if [ -n "$initd_script" ]; then
+            # Check if this systemd service is wrapping an init.d script by looking at the Loaded: line
+            if echo "$status_output" | grep -q -E "Loaded: loaded \(/etc/(rc\.d/)?init\.d/"; then
+                local initd_script=$(echo "$status_output" |
+                                  grep -E "Loaded: loaded \(/etc/(rc\.d/)?init\.d/" |
+                                  sed -E 's/.*Loaded: loaded \(\/etc\/(rc\.d\/)?init\.d\/([^;]+).*/\3/')
+
                 management_system="initd_via_systemd"
                 service_name="$initd_script"
             else
@@ -125,6 +130,7 @@ detect_oracle_service() {
             ;;
     esac
 }
+
 
 # Function to check if a service is managed by systemd
 is_systemd_service() {
