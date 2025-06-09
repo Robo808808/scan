@@ -25,3 +25,14 @@ else
   echo "Service check passed."
   exit 0
 fi
+
+# Output block
+echo "=== START REPORT FOR $HOST ==="
+if (( ${#ISSUES[@]} > 0 )); then
+  for issue in "${ISSUES[@]}"; do
+    echo "ISSUE: $issue"
+  done
+else
+  echo "OK: Service check passed"
+fi
+echo "=== END REPORT FOR $HOST ==="
