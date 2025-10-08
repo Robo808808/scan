@@ -1,13 +1,13 @@
- ┌──────────────────────────────┐        ┌──────────────────────────────┐
- │   Primary Database (DBPRIM) │        │  Standby Database (DBSTBY)  │
- │   ORACLE_HOME: /u01/app/19c │◄──────►│  ORACLE_HOME: /u01/app/19c  │
- │   Role: PRIMARY              │   Redo │  Role: PHYSICAL STANDBY     │
- │   Service: APP_TAC           │        │  FSFO target                │
- └──────────┬───────────────────┘        └──────────┬───────────────────┘
-            │                                         │
-            │  Broker Managed + Observer (FSFO)       │
-            │                                         │
-            ▼                                         ▼
+ ┌──────────────────────────────┐        ┌────────────────────────────┐
+ │   Primary Database (DBPRIM)  │        │  Standby Database (DBSTBY) │
+ │   ORACLE_HOME: /u01/app/19c  │◄──────►│  ORACLE_HOME: /u01/app/19c │
+ │   Role: PRIMARY              │   Redo │  Role: PHYSICAL STANDBY    │
+ │   Service: APP_TAC           │        │  FSFO target               │
+ └──────────┬───────────────────┘        └──────────┬─────────────────┘
+            │                                       │
+            │  Broker Managed + Observer (FSFO)     │
+            │                                       │
+            ▼                                       ▼
      ┌─────────────────────┐                    ┌─────────────────────┐
      │ Observer / Client   │                    │ Swingbench Driver   │
      │ Location: 3rd host  │                    │ JDBC/UCP TAC driver │
