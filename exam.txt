@@ -1,0 +1,176 @@
+ ┌──────────────────────────────┐        ┌──────────────────────────────┐
+ │   Primary Database (DBPRIM) │        │  Standby Database (DBSTBY)  │
+ │   ORACLE_HOME: /u01/app/19c │◄──────►│  ORACLE_HOME: /u01/app/19c  │
+ │   Role: PRIMARY              │   Redo │  Role: PHYSICAL STANDBY     │
+ │   Service: APP_TAC           │        │  FSFO target                │
+ └──────────┬───────────────────┘        └──────────┬───────────────────┘
+            │                                         │
+            │  Broker Managed + Observer (FSFO)       │
+            │                                         │
+            ▼                                         ▼
+     ┌─────────────────────┐                    ┌─────────────────────┐
+     │ Observer / Client   │                    │ Swingbench Driver   │
+     │ Location: 3rd host  │                    │ JDBC/UCP TAC driver │
+     │ FAN/ONS enabled     │                    │ Queries continuously│
+     └─────────────────────┘                    └─────────────────────┘
+
+
+Step 1: Create Primary Database
+
+alter database force logging;
+alter system set log_archive_dest_1='LOCATION=/u01/arch';
+
+Step 2: Configure Data Guard
+Primary:
+rman target /
+run {
+  allocate channel c1 device type disk;
+  backup as copy database format '/u01/backup/%U';
+}
+Standby:
+rman target sys@dbprim auxiliary /
+duplicate target database for standby from active database;
+Primary
+dgmgrl sys@dbprim
+DGMGRL> create configuration 'dgconf' as primary database is dbprim connect identifier is dbprim;
+DGMGRL> add database dbstby as connect identifier is dbstby maintained as physical;
+DGMGRL> enable configuration;
+
+Step 3: Enable Fast Start Failover (FSFO)
+
+DGMGRL> enable fast_start failover;
+DGMGRL> start observer;
+
+dgmgrl sys@dbprim "start observer file=/u01/observerfsfo/observer.dat"      -- on third host
+
+Step 4: Configure Transparent Application Continuity (TAC)
+
+srvctl add service -db dbprim -service app_tac \
+  -role PRIMARY \
+  -preferred dbprim \
+  -available dbstby \
+  -failovertype TRANSPARENT \
+  -failover_restore LEVEL \
+  -commit_outcome TRUE \
+  -replay_init_time 1800 \
+  -retention 86400 \
+  -notification TRUE
+
+srvctl start service -db dbprim -service app_tac
+
+select name, failover_type, failover_restore, commit_outcome
+from dba_services where name='APP_TAC';
+
+Step 5: Enable ONS/FAN
+
+On both DB nodes:
+Add to $ORACLE_HOME/opmn/conf/ons.config (if standalone) or via srvctl modify service -notification TRUE
+Ensure port (default 6200) is open.
+
+Example on client:
+export ONS_CONFIG="nodes=dbprim:6200,dbstby:6200"
+
+Step 6: Configure Client with UCP + TAC
+Edit swingconfig.xml connection string:
+<connection-string>
+  jdbc:oracle:thin:@(DESCRIPTION=
+    (ADDRESS_LIST=
+      (ADDRESS=(PROTOCOL=TCP)(HOST=dbprim)(PORT=1521))
+      (ADDRESS=(PROTOCOL=TCP)(HOST=dbstby)(PORT=1521)))
+    (CONNECT_DATA=(SERVICE_NAME=app_tac)))
+</connection-string>
+
+-- set properties for TAC
+<property name="oracle.net.ns.SQLnetDef.TAC" value="true"/>
+<property name="oracle.jdbc.fanEnabled" value="true"/>
+<property name="oracle.jdbc.replayInitiationTimeout" value="1800"/>
+
+-- start swingbench
+./charbench -c ./swingconfig.xml -ucp -v users,tpm
+
+
+Step 7: Validate Zero-Downtime Failover
+DGMGRL> switchover to dbstby;
+sudo pkill -9 -f pmon_dbprim
+(FSFO wil auto failover in second-case)
+
+Step 8: Transient Logical Standby Upgrade (for patch demo)
+DGMGRL> convert database dbstby to snapshot standby;
+
+
+🧩 2. Typical MAA Zero-Downtime Upgrade Flow with AutoUpgrade
+
+Step 1  Primary: DBPRIM    | Version 19.15
+         Standby: DBSTBY   | Version 19.15
+         FSFO Observer running
+         TAC Service: APP_TAC
+
+Step 2  Prepare patched Oracle Home on standby host
+         e.g. /u01/app/oracle/product/19.21.0/dbhome_2
+
+Step 3  Convert standby to transient logical standby
+         DGMGRL> convert database dbstby to snapshot standby;
+         (or to transient logical using TLS script)
+
+Step 4  Run AutoUpgrade on the standby (in deploy mode)
+         java -jar $ORACLE_HOME/rdbms/admin/autoupgrade.jar \
+              -config /home/oracle/autoupgrade_tls.cfg \
+              -mode deploy
+
+Step 5  Validate upgraded standby
+         DGMGRL> convert database dbstby to physical standby;
+         Redo apply resumes
+
+Step 6  Perform switchover
+         DGMGRL> switchover to dbstby;
+         Clients continue via TAC with no outage
+
+Step 7  Upgrade former primary using AutoUpgrade
+         (same config file, different home path)
+
+Step 8  Reinstate as standby
+         DGMGRL> reinstate database dbprim;
+
+🧰 3. Example AutoUpgrade Configuration for This Scenario
+
+global.autoupg_log_dir=/u01/app/autoupgrade/logs
+global.raise_compatibility=yes
+
+upg1.source_home=/u01/app/oracle/product/19.15.0/dbhome_1
+upg1.target_home=/u01/app/oracle/product/19.21.0/dbhome_2
+upg1.sid=DBSTBY
+upg1.log_dir=/u01/app/autoupgrade/dbstby
+upg1.upgrade_node=dbstby
+upg1.start_time=immediate
+upg1.target_version=19.21
+upg1.run_utlrp=yes
+upg1.timezone_upg=yes
+upg1.restoration=no
+
+$ java -jar $ORACLE_HOME/rdbms/admin/autoupgrade.jar -config /home/oracle/autoupgrade_tls.cfg -mode deploy
+
+5. Advanced Option — Use AutoUpgrade in “Dual Mode”
+
+AutoUpgrade has a -mode deploy -n 2 syntax that lets you upgrade two databases sequentially —
+e.g. first standby, then primary — using one config file.
+This can fully automate the rolling upgrade sequence if combined with pre- and post-actions that call Data Guard switchover commands.
+
+
+🎯 10. Example Demo Sequence (Scripted Overview)
+
+# Prepare transient standby
+dgmgrl sys@dbprim "convert database dbstby to transient logical standby"
+
+# Run AutoUpgrade on dbstby
+java -jar /u01/app/oracle/product/19.15.0/dbhome_1/rdbms/admin/autoupgrade.jar \
+  -config /home/oracle/autoupgrade_tls.cfg -mode deploy
+
+# Switchover after upgrade
+dgmgrl sys@dbprim "switchover to dbstby"
+
+# Run AutoUpgrade on old primary
+java -jar /u01/app/oracle/product/19.15.0/dbhome_1/rdbms/admin/autoupgrade.jar \
+  -config /home/oracle/autoupgrade_dbprim.cfg -mode deploy
+
+# Reinstate and resume
+dgmgrl sys@dbstby "reinstate database dbprim"
