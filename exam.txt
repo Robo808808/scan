@@ -111,7 +111,7 @@ BEGIN
 END;
 /
 
--- Start/stop by role immediately on role change (no GI required)
+-- Start/stop by role immediately on role change (no GI required) on CD$ROOT
 CREATE OR REPLACE TRIGGER app_tac_role_change_trg
 AFTER DB_ROLE_CHANGE ON DATABASE
 DECLARE
@@ -141,6 +141,30 @@ BEGIN
   END IF;
 END;
 /
+
+-- Start/stop the service when THIS PDB opens, based on database role
+CREATE OR REPLACE TRIGGER app_tac_pdb_open_trg
+AFTER OPEN ON PLUGGABLE DATABASE
+DECLARE
+  v_role      VARCHAR2(30);
+  v_open_mode VARCHAR2(20);
+BEGIN
+  SELECT database_role, open_mode
+    INTO v_role, v_open_mode
+    FROM v$database;
+
+  -- Start on PRIMARY; optionally start on ADG read-only too
+  IF v_role = 'PRIMARY' THEN
+    DBMS_SERVICE.START_SERVICE('app_tac');
+  ELSIF v_role = 'PHYSICAL STANDBY' AND v_open_mode LIKE 'READ ONLY%' THEN
+    -- If you want the APP_TAC service available on an ADG read-only standby, keep this START; otherwise STOP
+    DBMS_SERVICE.START_SERVICE('app_tac');
+  ELSE
+    DBMS_SERVICE.STOP_SERVICE('app_tac');
+  END IF;
+END;
+/
+
 
 -- Verify
 COLUMN name FORMAT A12
