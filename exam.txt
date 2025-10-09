@@ -59,33 +59,33 @@ srvctl add service -db dbprim -service app_tac \
 srvctl start service -db dbprim -service app_tac
 
 
--- Drop if it already exists (ignore ORA-44303 if not present)
+-- Drop the service if it already exists
 BEGIN
   DBMS_SERVICE.DELETE_SERVICE('app_tac');
-EXCEPTION WHEN OTHERS THEN NULL;
+EXCEPTION WHEN OTHERS THEN
+  IF SQLCODE != -44303 THEN RAISE; END IF;
 END;
 /
 
--- Create TAC-enabled service for the PRIMARY role
+-- Create TAC-enabled service
 BEGIN
   DBMS_SERVICE.CREATE_SERVICE(
-    service_name         => 'app_tac',      -- internal name
-    network_name         => 'app_tac',      -- what clients use
-    aq_ha_notifications  => TRUE,           -- FAN via AQ
-    commit_outcome       => TRUE,           -- required for AC/TAC
-    failover_restore     => 'LEVEL',        -- TAC state restore
-    role                 => DBMS_SERVICE.ROLE_PRIMARY
+    service_name        => 'app_tac',
+    network_name        => 'app_tac',
+    aq_ha_notifications => TRUE,
+    commit_outcome      => TRUE,
+    failover_restore    => 'LEVEL',
+    role                => 'PRIMARY'          -- string literal, not constant
   );
 
-  -- Set TAC failover type (string literal, NOT a constant)
   DBMS_SERVICE.MODIFY_SERVICE(
     service_name   => 'app_tac',
-    failover_type  => 'TRANSPARENT'         -- TAC
+    failover_type  => 'TRANSPARENT'           -- string literal
   );
 END;
 /
 
--- Auto-start/stop by role after startup (simple role-based services)
+-- Role-based startup trigger
 CREATE OR REPLACE TRIGGER manage_app_tac_service
 AFTER STARTUP ON DATABASE
 DECLARE
@@ -100,28 +100,31 @@ BEGIN
 END;
 /
 
--- Verify attributes
+-- Check
+COL name FORMAT A12
+COL failover_type FORMAT A15
+COL failover_restore FORMAT A15
+COL commit_outcome FORMAT A10
 SELECT name, failover_type, failover_restore, commit_outcome
 FROM   dba_services
 WHERE  name = 'APP_TAC';
 
 
--- Drop if it already exists (ignore ORA-44303 if not present)
 BEGIN
   DBMS_SERVICE.DELETE_SERVICE('app_tac');
-EXCEPTION WHEN OTHERS THEN NULL;
+EXCEPTION WHEN OTHERS THEN
+  IF SQLCODE != -44303 THEN RAISE; END IF;
 END;
 /
 
--- Create the same service, but tied to PHYSICAL STANDBY role
 BEGIN
   DBMS_SERVICE.CREATE_SERVICE(
-    service_name         => 'app_tac',
-    network_name         => 'app_tac',
-    aq_ha_notifications  => TRUE,
-    commit_outcome       => TRUE,
-    failover_restore     => 'LEVEL',
-    role                 => DBMS_SERVICE.ROLE_PHYSICAL_STANDBY
+    service_name        => 'app_tac',
+    network_name        => 'app_tac',
+    aq_ha_notifications => TRUE,
+    commit_outcome      => TRUE,
+    failover_restore    => 'LEVEL',
+    role                => 'PHYSICAL STANDBY'   -- string literal
   );
 
   DBMS_SERVICE.MODIFY_SERVICE(
@@ -131,7 +134,6 @@ BEGIN
 END;
 /
 
--- Start/stop by role (start only when this DB is a standby)
 CREATE OR REPLACE TRIGGER manage_app_tac_service
 AFTER STARTUP ON DATABASE
 DECLARE
@@ -139,7 +141,6 @@ DECLARE
 BEGIN
   SELECT DATABASE_ROLE INTO v_role FROM V$DATABASE;
   IF v_role = 'PHYSICAL STANDBY' THEN
-    -- If you don’t want read-only on standby, comment this out
     DBMS_SERVICE.START_SERVICE('app_tac');
   ELSE
     DBMS_SERVICE.STOP_SERVICE('app_tac');
@@ -147,29 +148,10 @@ BEGIN
 END;
 /
 
--- Verify
-SELECT name, failover_type, failover_restore, commit_outcome
+SELECT name, role, failover_type, failover_restore, commit_outcome
 FROM   dba_services
-WHERE  name = 'APP_TAC';
+WHERE  name='APP_TAC';
 
-
-CREATE OR REPLACE TRIGGER manage_app_tac_service
-AFTER STARTUP ON DATABASE
-DECLARE
-  v_role VARCHAR2(30);
-BEGIN
-  SELECT DATABASE_ROLE INTO v_role FROM V$DATABASE;
-
-  IF v_role = 'PRIMARY' THEN
-    DBMS_SERVICE.START_SERVICE('app_tac');
-  ELSIF v_role = 'PHYSICAL STANDBY' THEN
-    -- Start if you want read-only on standby; otherwise leave stopped
-    DBMS_SERVICE.START_SERVICE('app_tac');  -- or comment out to keep off
-  ELSE
-    DBMS_SERVICE.STOP_SERVICE('app_tac');
-  END IF;
-END;
-/
 
 
 -- SHOW PARAMETER local_listener
