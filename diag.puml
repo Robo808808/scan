@@ -1,0 +1,71 @@
+@startuml
+title TLS Rolling Upgrade with TAC masking switchover
+
+participant "App Pool (UCP + TAC)\n(JBoss/WebSphere)" as APP
+participant "DG Service\n(APP_TAC)" as SVC
+participant "Primary DB\n(Physical, serving)" as PRI
+participant "Standby DB\n(Physical -> Transient Logical -> Physical)" as STBY
+participant "FSFO Observer\n(DGMGRL)" as OBS
+participant "AutoUpgrade\n(Standby host)" as AU_STBY
+participant "AutoUpgrade\n(Primary host)" as AU_PRI
+
+== Steady state ==
+note over APP
+- Connections via SERVICE_NAME=APP_TAC
+- TAC enabled in UCP
+- FAN enabled
+end note
+APP -> SVC : JDBC connect
+SVC --> PRI : Route to Primary
+PRI -> STBY : Redo transport (ASYNC)
+OBS -> PRI : Monitor (Broker)
+OBS -> STBY : Monitor (Broker)
+
+== Prepare transient logical standby ==
+note over STBY
+Convert to Transient Logical Standby
+(SQL Apply capable)
+end note
+PRI -> STBY : Broker: convert to transient logical
+
+== Upgrade standby while app runs on primary ==
+AU_STBY -> STBY : AutoUpgrade deploy\n(patch/upgrade + datapatch)
+STBY --> AU_STBY : Upgrade complete (standby is newer)
+APP -> PRI : Ongoing workload\n(no outage)
+
+== Planned switchover to upgraded standby ==
+note over SVC
+Service will be relocated\nFAN notifies clients,\nUCP+TAC replays
+end note
+PRI -> STBY : Broker: switchover
+SVC -> APP : FAN event (service relocating)
+APP -> SVC : Transparent reconnection\n(TAC replays in-flight work)
+SVC --> STBY : Route to new Primary
+note over APP
+No user-visible error\n(TPS dip only)
+end note
+
+== Upgrade former primary ==
+note over PRI
+Now standby (older version)\nready to be upgraded
+end note
+AU_PRI -> PRI : AutoUpgrade deploy\n(patch/upgrade + datapatch)
+PRI --> AU_PRI : Upgrade complete
+
+== Re-establish final DG posture ==
+STBY -> PRI : Broker: convert to physical standby
+PRI <- STBY : Redo apply resumes (MRP)
+OBS -> STBY : Monitor (now Primary)
+OBS -> PRI : Monitor (now Standby)
+
+== End state ==
+note over APP
+Still connected via APP_TAC\nTAC shields maintenance
+end note
+note over STBY
+New Primary (upgraded)
+end note
+note over PRI
+Physical Standby (upgraded)
+end note
+@enduml
