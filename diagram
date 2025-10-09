@@ -1,0 +1,48 @@
+@startuml
+skinparam componentStyle rectangle
+skinparam shadowing false
+skinparam ArrowColor #444
+skinparam PackageBorderColor #999
+skinparam DefaultTextAlignment center
+
+title Oracle MAA (Non-RAC): TAC + UCP + FAN + Data Guard + FSFO
+
+rectangle "Application Tier" {
+  component "JBoss Cluster (2 nodes)\nJDBC Thin + UCP (pool)\nTAC + FAN enabled" as JBoss
+  component "WebSphere Cluster (2 nodes)\nJDBC Thin + UCP (pool)\nTAC + FAN enabled" as WAS
+}
+
+rectangle "Database Tier (19c Single-Instance)" {
+  component "Primary DB\nService: APP_TAC\n(failovertype=TRANSPARENT,\nfailover_restore=LEVEL,\ncommit_outcome=TRUE,\nnotification=TRUE)\nONS + DG Broker" as Primary
+  component "Physical Standbys (x3)\n(FSFO target + 2 others)\nRFS/MRP + ONS + DG Broker" as Standbys
+}
+
+rectangle "High Availability Control" {
+  component "FSFO Observer Host\n(DGMGRL observer via Instant Client)" as Observer
+}
+
+' --- Representative relationships (one of each) ---
+JBoss --> Primary : JDBC (SERVICE=APP_TAC)
+WAS  --> Primary : JDBC (SERVICE=APP_TAC)
+
+Primary ..> JBoss : FAN/ONS event
+Primary ..> WAS   : FAN/ONS event
+
+Primary --> Standbys : Redo transport (ASYNC)
+Observer ..> Primary  : Monitor (Broker)
+Observer ..> Standbys : FSFO control
+Primary <--> Standbys : Broker config (switchover/failover)
+
+note right of Primary
+TAC-enabled service:
+- Preferred: Primary
+- Available: Standbys
+Clients reconnect/replay via UCP+TAC
+end note
+
+note right of Observer
+Runs "dgmgrl start observer"
+No DB binaries required
+Separate lightweight host
+end note
+@enduml
