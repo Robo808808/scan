@@ -58,6 +58,66 @@ srvctl add service -db dbprim -service app_tac \
 
 srvctl start service -db dbprim -service app_tac
 
+-- connect as SYSDBA in CDB$ROOT (or target PDB: set CONTAINER=>'<PDB>')
+BEGIN
+  DBMS_SERVICE.CREATE_SERVICE(
+    service_name  => 'app_tac',            -- service in the DB
+    network_name  => 'app_tac',            -- what clients use
+    goal          => DBMS_SERVICE.GOAL_SERVICE_TIME,
+    aq_ha_notifications => TRUE,           -- FAN via AQ
+    failover_method => NULL,               -- (TAF off)
+    failover_type   => DBMS_SERVICE.FAILOVER_TYPE_TRANSPARENT, -- TAC
+    failover_restore=> 'LEVEL',            -- TAC session state restore
+    commit_outcome  => TRUE,               -- idem-potent commit outcome
+    replay_init_time=> 1800,               -- seconds TAC can replay
+    retention_timeout=> 86400,             -- seconds to keep history
+    role            => DBMS_SERVICE.ROLE_PRIMARY  -- on PRIMARY hosts
+  );
+END;
+/
+On the standby hosts, run the same block but set role => DBMS_SERVICE.ROLE_PHYSICAL_STANDBY.
+
+
+CREATE OR REPLACE TRIGGER manage_app_tac_service
+AFTER STARTUP ON DATABASE
+DECLARE
+  v_role VARCHAR2(30);
+BEGIN
+  SELECT DATABASE_ROLE INTO v_role FROM V$DATABASE;
+
+  IF v_role = 'PRIMARY' THEN
+    DBMS_SERVICE.START_SERVICE('app_tac');
+  ELSIF v_role = 'PHYSICAL STANDBY' THEN
+    -- Start if you want read-only on standby; otherwise leave stopped
+    DBMS_SERVICE.START_SERVICE('app_tac');  -- or comment out to keep off
+  ELSE
+    DBMS_SERVICE.STOP_SERVICE('app_tac');
+  END IF;
+END;
+/
+
+
+-- SHOW PARAMETER local_listener
+
+The aq_ha_notifications => TRUE above lets the DB publish HA events. Some clients (OCI/ODP.NET) consume from AQ directly when notification=TRUE;
+docs show the server-side bit typically via srvctl, but with DBMS_SERVICE the notification property is covered by AQ HA notifications.
+
+For Java UCP clients, the most reliable approach is to also run ONS daemons on each DB host and point UCP at them:
+
+$ORACLE_HOME/bin/onsctl start
+
+In your JBoss/WebSphere datasource, set:
+oracle.ons.nodes=dbprim:6200,dbstby1:6200,dbstby2:6200,dbstby3:6200
+oracle.jdbc.fanEnabled=true
+
+5) Client connect string stays the same
+
+jdbc:oracle:thin:@(DESCRIPTION=
+ (ADDRESS_LIST=(ADDRESS=(PROTOCOL=TCP)(HOST=dbprim)(PORT=1521))
+               (ADDRESS=(PROTOCOL=TCP)(HOST=dbstby1)(PORT=1521)))
+ (CONNECT_DATA=(SERVICE_NAME=app_tac)))
+
+
 select name, failover_type, failover_restore, commit_outcome
 from dba_services where name='APP_TAC';
 
