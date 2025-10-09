@@ -183,6 +183,74 @@ WHERE  name='APP_TAC';
 
 
 
+1) SQL script to manage the service (runs as SYSDBA)
+-- manage_app_tac.sql  (plain 19c SI; run via sqlplus / as sysdba)
+-- Args: define PDB_NAME before calling (e.g., DEFINE PDB_NAME=MYAPP)
+
+SET SERVEROUTPUT ON FEEDBACK OFF VERIFY OFF HEADING OFF LINES 200 PAGES 0
+WHENEVER SQLERROR EXIT 1
+
+DECLARE
+  v_role       VARCHAR2(30);
+  v_open_mode  VARCHAR2(20);
+  v_exists     NUMBER;
+  -- helper to apply TAC/AC attributes via the parameter-array overload
+  PROCEDURE apply_tac IS
+    p DBMS_SERVICE.svc_parameter_array;
+  BEGIN
+    -- TAC/AC essentials (portable keys)
+    p('FAILOVER_TYPE')             := 'AUTO';      -- TAC (AUTO/TXN replay)
+    p('FAILOVER_RESTORE')          := 'AUTO';      -- TAC state restore
+    p('COMMIT_OUTCOME')            := 'true';      -- Transaction Guard
+    p('REPLAY_INITIATION_TIMEOUT') := 1800;        -- seconds
+    p('RETENTION_TIMEOUT')         := 86400;       -- seconds (24h)
+    -- FAN/drain (optional)
+    p('AQ_HA_NOTIFICATIONS')       := 'true';
+    p('DRAIN_TIMEOUT')             := 60;
+    p('STOP_OPTION')               := 'TRANSACTIONAL';
+    -- retry pacing (optional)
+    p('FAILOVER_DELAY')            := 10;
+    p('FAILOVER_RETRIES')          := 30;
+
+    DBMS_SERVICE.MODIFY_SERVICE('app_tac', p);
+  END;
+BEGIN
+  -- Check DG role (in ROOT)
+  SELECT database_role INTO v_role FROM v$database;
+
+  -- Switch into target PDB
+  EXECUTE IMMEDIATE 'alter session set container=&PDB_NAME';
+
+  -- Make sure PDB is open (READ WRITE or ADG READ ONLY)
+  SELECT open_mode INTO v_open_mode FROM v$database;
+
+  -- Ensure service exists
+  SELECT COUNT(*) INTO v_exists FROM dba_services WHERE name='APP_TAC';
+  IF v_exists = 0 THEN
+    DBMS_SERVICE.CREATE_SERVICE(service_name=>'app_tac', network_name=>'app_tac');
+  END IF;
+
+  -- Apply TAC attributes (safe on 19c SI)
+  apply_tac;
+
+  -- Start/stop by role + PDB mode
+  IF v_role = 'PRIMARY' AND (v_open_mode LIKE 'READ WRITE' OR v_open_mode LIKE 'READ ONLY%') THEN
+    DBMS_SERVICE.START_SERVICE('app_tac');
+    DBMS_OUTPUT.PUT_LINE('APP_TAC started in &PDB_NAME (PRIMARY)');
+  ELSIF v_role = 'PHYSICAL STANDBY' AND v_open_mode LIKE 'READ ONLY%' THEN
+    -- If you DO NOT want the service on ADG read-only, change to STOP_SERVICE here.
+    DBMS_SERVICE.START_SERVICE('app_tac');
+    DBMS_OUTPUT.PUT_LINE('APP_TAC started in &PDB_NAME (ADG RO)');
+  ELSE
+    BEGIN
+      DBMS_SERVICE.STOP_SERVICE('app_tac');
+      DBMS_OUTPUT.PUT_LINE('APP_TAC stopped in &PDB_NAME');
+    EXCEPTION WHEN OTHERS THEN NULL; END;
+  END IF;
+END;
+/
+
+
 -- SHOW PARAMETER local_listener
 
 The aq_ha_notifications => TRUE above lets the DB publish HA events. Some clients (OCI/ODP.NET) consume from AQ directly when notification=TRUE;
@@ -320,3 +388,52 @@ java -jar /u01/app/oracle/product/19.15.0/dbhome_1/rdbms/admin/autoupgrade.jar \
 
 # Reinstate and resume
 dgmgrl sys@dbstby "reinstate database dbprim"
+
+
+
+
+
+sqlplus scott/tiger@'(DESCRIPTION=
+  (ADDRESS_LIST=
+    (ADDRESS=(PROTOCOL=TCP)(HOST=dbprim)(PORT=1521))
+    (ADDRESS=(PROTOCOL=TCP)(HOST=dbstby1)(PORT=1521)))
+  (CONNECT_DATA=(SERVICE_NAME=app_tac)))'
+
+SHOW USER;
+SELECT SYS_CONTEXT('USERENV','SERVICE_NAME') FROM DUAL;
+SELECT DATABASE_ROLE FROM V$DATABASE;
+
+
+
+onsctl debug on
+
+
+SELECT QUEUE_NAME, ENQUEUE_ENABLED, DEQUEUE_ENABLED FROM DBA_QUEUES WHERE QUEUE_NAME LIKE '%HA%';
+
+
+import java.sql.*;
+import oracle.ucp.jdbc.PoolDataSourceFactory;
+import oracle.ucp.jdbc.PoolDataSource;
+
+public class TacDemo {
+  public static void main(String[] args) throws Exception {
+    PoolDataSource pds = PoolDataSourceFactory.getPoolDataSource();
+    pds.setConnectionFactoryClassName("oracle.jdbc.replay.OracleDataSourceImpl");
+    pds.setURL("jdbc:oracle:thin:@(DESCRIPTION=(ADDRESS_LIST=(ADDRESS=(PROTOCOL=TCP)(HOST=dbprim)(PORT=1521))(ADDRESS=(PROTOCOL=TCP)(HOST=dbstby1)(PORT=1521)))(CONNECT_DATA=(SERVICE_NAME=app_tac)))");
+    pds.setUser("scott");
+    pds.setPassword("tiger");
+    pds.setFastConnectionFailoverEnabled(true);  // enables FAN
+    pds.setONSConfiguration("dbprim:6200,dbstby1:6200"); // adjust if needed
+
+    try (Connection conn = pds.getConnection();
+         Statement st = conn.createStatement()) {
+      for (int i=0; i<100000; i++) {
+        st.execute("INSERT INTO tac_test VALUES (" + i + ")");
+        Thread.sleep(1000);
+      }
+    }
+  }
+}
+
+
+
