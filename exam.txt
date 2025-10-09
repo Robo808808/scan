@@ -67,38 +67,71 @@ EXCEPTION WHEN OTHERS THEN
 END;
 /
 
--- Create TAC-enabled service
--- 1) Create service minimally
-DECLARE n NUMBER;
+-- app_tac_service.sql  (run as SYS in CDB$ROOT or target PDB)
+
+SET SERVEROUTPUT ON
+DECLARE
+  v_exists NUMBER;
 BEGIN
-  SELECT COUNT(*) INTO n FROM dba_services WHERE name='APP_TAC';
-  IF n = 0 THEN
+  SELECT COUNT(*) INTO v_exists FROM dba_services WHERE name = 'APP_TAC';
+  IF v_exists = 0 THEN
     DBMS_SERVICE.CREATE_SERVICE(
       service_name => 'app_tac',
       network_name => 'app_tac'
     );
+    DBMS_OUTPUT.PUT_LINE('Created service APP_TAC');
+  ELSE
+    DBMS_OUTPUT.PUT_LINE('Service APP_TAC already exists');
   END IF;
 END;
 /
 
--- 2) Set TAC/FAN attributes (each guarded for cross-version safety)
-BEGIN DBMS_SERVICE.MODIFY_SERVICE('app_tac', failover_type=>'TRANSPARENT'); EXCEPTION WHEN OTHERS THEN NULL; END;
-/
-BEGIN DBMS_SERVICE.MODIFY_SERVICE('app_tac', failover_restore=>'LEVEL');    EXCEPTION WHEN OTHERS THEN NULL; END;
-/
-BEGIN DBMS_SERVICE.MODIFY_SERVICE('app_tac', commit_outcome=>TRUE);         EXCEPTION WHEN OTHERS THEN NULL; END;
-/
-BEGIN DBMS_SERVICE.MODIFY_SERVICE('app_tac', aq_ha_notifications=>TRUE);    EXCEPTION WHEN OTHERS THEN NULL; END;
-/
-BEGIN DBMS_SERVICE.MODIFY_SERVICE('app_tac', replay_init_time=>1800);       EXCEPTION WHEN OTHERS THEN NULL; END;
-/
-BEGIN DBMS_SERVICE.MODIFY_SERVICE('app_tac', retention_timeout=>86400);     EXCEPTION WHEN OTHERS THEN NULL; END;
+-- Use the parameter-array overload for TAC/AC attributes (portable on 19c)
+DECLARE
+  params DBMS_SERVICE.svc_parameter_array;
+BEGIN
+  -- TAC/AC essentials
+  params('FAILOVER_TYPE')             := 'AUTO';       -- TAC (use 'TRANSACTION' for AC)
+  params('FAILOVER_RESTORE')          := 'AUTO';       -- TAC (use 'LEVEL1' for AC)
+  params('COMMIT_OUTCOME')            := 'true';       -- enable Transaction Guard
+  params('REPLAY_INITIATION_TIMEOUT') := 1800;         -- seconds
+  params('RETENTION_TIMEOUT')         := 86400;        -- seconds (24h)
+
+  -- FAN / drain (optional but recommended)
+  params('AQ_HA_NOTIFICATIONS')       := 'true';
+  params('DRAIN_TIMEOUT')             := 60;           -- graceful stop/relocate window
+  params('STOP_OPTION')               := 'TRANSACTIONAL';
+
+  -- Reasonable connect retry pacing (optional)
+  params('FAILOVER_DELAY')            := 10;
+  params('FAILOVER_RETRIES')          := 30;
+
+  DBMS_SERVICE.MODIFY_SERVICE('app_tac', params);
+  DBMS_OUTPUT.PUT_LINE('Modified service APP_TAC (TAC attributes applied)');
+END;
 /
 
--- 3) Start/stop by role after startup
-CREATE OR REPLACE TRIGGER manage_app_tac_service
+-- Start/stop by role immediately on role change (no GI required)
+CREATE OR REPLACE TRIGGER app_tac_role_change_trg
+AFTER DB_ROLE_CHANGE ON DATABASE
+DECLARE
+  v_role VARCHAR2(30);
+BEGIN
+  SELECT database_role INTO v_role FROM v$database;
+  IF v_role = 'PRIMARY' THEN
+    DBMS_SERVICE.START_SERVICE('app_tac');
+  ELSE
+    -- If you want RO on standby, change to START_SERVICE here
+    DBMS_SERVICE.STOP_SERVICE('app_tac');
+  END IF;
+END;
+/
+
+-- Also handle normal instance restarts
+CREATE OR REPLACE TRIGGER app_tac_startup_trg
 AFTER STARTUP ON DATABASE
-DECLARE v_role VARCHAR2(30);
+DECLARE
+  v_role VARCHAR2(30);
 BEGIN
   SELECT database_role INTO v_role FROM v$database;
   IF v_role = 'PRIMARY' THEN
@@ -109,56 +142,14 @@ BEGIN
 END;
 /
 
--- 4) Verify
-COL name FORMAT A10
-COL failover_type FORMAT A15
-COL failover_restore FORMAT A15
-COL commit_outcome FORMAT A10
+-- Verify
+COLUMN name FORMAT A12
+COLUMN failover_type FORMAT A10
+COLUMN commit_outcome FORMAT A6
 SELECT name, failover_type, failover_restore, commit_outcome
 FROM   dba_services
-WHERE  name='APP_TAC';
+WHERE  name = 'APP_TAC';
 
--- 1) Create service minimally
-DECLARE n NUMBER;
-BEGIN
-  SELECT COUNT(*) INTO n FROM dba_services WHERE name='APP_TAC';
-  IF n = 0 THEN
-    DBMS_SERVICE.CREATE_SERVICE(
-      service_name => 'app_tac',
-      network_name => 'app_tac'
-    );
-  END IF;
-END;
-/
-
--- 2) Set TAC/FAN attributes
-BEGIN DBMS_SERVICE.MODIFY_SERVICE('app_tac', failover_type=>'TRANSPARENT'); EXCEPTION WHEN OTHERS THEN NULL; END;
-/
-BEGIN DBMS_SERVICE.MODIFY_SERVICE('app_tac', failover_restore=>'LEVEL');    EXCEPTION WHEN OTHERS THEN NULL; END;
-/
-BEGIN DBMS_SERVICE.MODIFY_SERVICE('app_tac', commit_outcome=>TRUE);         EXCEPTION WHEN OTHERS THEN NULL; END;
-/
-BEGIN DBMS_SERVICE.MODIFY_SERVICE('app_tac', aq_ha_notifications=>TRUE);    EXCEPTION WHEN OTHERS THEN NULL; END;
-/
-BEGIN DBMS_SERVICE.MODIFY_SERVICE('app_tac', replay_init_time=>1800);       EXCEPTION WHEN OTHERS THEN NULL; END;
-/
-BEGIN DBMS_SERVICE.MODIFY_SERVICE('app_tac', retention_timeout=>86400);     EXCEPTION WHEN OTHERS THEN NULL; END;
-/
-
--- 3) Start/stop by role after startup (start only when this DB is STANDBY; change to taste)
-CREATE OR REPLACE TRIGGER manage_app_tac_service
-AFTER STARTUP ON DATABASE
-DECLARE v_role VARCHAR2(30);
-BEGIN
-  SELECT database_role INTO v_role FROM v$database;
-  IF v_role = 'PHYSICAL STANDBY' THEN
-    -- If you don't want read-only on standby, comment this out
-    DBMS_SERVICE.START_SERVICE('app_tac');
-  ELSE
-    DBMS_SERVICE.STOP_SERVICE('app_tac');
-  END IF;
-END;
-/
 
 -- 4) Verify
 SELECT name, failover_type, failover_restore, commit_outcome
