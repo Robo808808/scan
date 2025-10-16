@@ -1,0 +1,136 @@
+@startuml
+skinparam dpi 180
+skinparam shadowing false
+skinparam rectangle {
+BorderColor #555
+BackgroundColor #f9f9f9
+}
+skinparam cloud {
+BorderColor #777
+}
+skinparam note {
+BackgroundColor #fff7e6
+}
+
+
+rectangle "Users" as U
+rectangle "App Tier (On‑Prem)\nVMs/Servers" as APP
+rectangle "Oracle DB 19c Instance on AIX" as DB
+rectangle "Veritas ODM" as ODM
+rectangle "HBAs" as HBA
+rectangle "FC Fabric\n(Brocade/Cisco)" as SAN
+rectangle "PowerStore 9200T\nFE Ports | NVMe back‑end" as ARR
+
+
+U --> APP : HTTPS/IPC
+APP --> DB : JDBC/SQLNet (<1–2 ms LAN)
+DB --> ODM : PCIe (<50 µs)
+ODM --> HBA : PCIe (<50 µs)
+HBA --> SAN : FC (10–100 µs/port)
+SAN --> ARR : FC (10–100 µs/port)
+
+
+note right of ARR
+FE latency (target): < 1 ms typical
+BE media: NVMe/flash (~100–300 µs)
+Array cache absorbs bursts
+end note
+
+
+note bottom of APP
+Failure domains:
+• App servers
+• Network (LAN)
+• DB host (AIX)
+• Veritas ODM
+• HBAs / drivers
+• FC fabric (ISLs, BB credits)
+• Array controllers / media
+end note
+
+
+@enduml
+
+----------------------------------------------------------------------------------------------
+
+@startuml
+skinparam dpi 150
+skinparam shadowing false
+
+rectangle "Users" as U
+rectangle "App Tier (On-Prem)\nVMs/Servers" as APP
+
+package "Cloud Region" as CR {
+  rectangle "Managed DB (RDS/EC2)\nEBS io2 Block Express" as RDS
+}
+
+U --> APP : HTTPS/IPC
+APP --> RDS : JDBC/SQLNet (Direct Connect/VPN)\nRTT 2-10 ms
+
+note right of RDS
+Storage managed (EBS):
+- Provisioned IOPS/throughput
+- Typical <1-2 ms device latency
+- No host-level tuning access
+end note
+
+note bottom of CR
+Failure domains expand:
+- On-prem network and DC
+- Direct Connect/MPLS
+- Cloud VPC/AZ/service
+- DB service failover (30-90 s)
+end note
+@enduml
+
+----------------------------------------------------------------------------------------------
+
+@startuml
+skinparam dpi 180
+skinparam shadowing false
+skinparam rectangle {
+BorderColor #555
+BackgroundColor #f9f9f9
+}
+skinparam cloud {
+BorderColor #2f9e44
+BackgroundColor #effff0
+}
+skinparam note {
+BackgroundColor #fff7e6
+}
+
+
+cloud "Cloud Region (AZ‑A)" as AZA {
+rectangle "App Tier (VMs/Containers)" as APP
+rectangle "Oracle DB on Exadata\nRDMA over Converged Ethernet" as EXA
+}
+cloud "Cloud Region (AZ‑B)" as AZB {
+rectangle "Standby / HA" as STB
+}
+
+
+APP --> EXA : JDBC/SQLNet (<0.5–1 ms in‑AZ)
+EXA --> STB : Sync/Async DG (1–3+ ms X‑AZ)
+
+
+note right of EXA
+Engineered stack:
+• Smart Scan offload
+• NVMe + RDMA
+• Sub‑ms commits typical
+• Oracle‑managed patches
+end note
+
+
+note bottom
+Failure domains simplified:
+• App + DB share low‑latency fabric
+• AZ isolation; cross‑AZ DG
+• Optional cross‑region DR
+end note
+
+
+@enduml
+
+----------------------------------------------------------------------
