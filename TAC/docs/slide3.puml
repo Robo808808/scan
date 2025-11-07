@@ -1,0 +1,12 @@
+@startuml
+salt
+{
+{T
++ Oracle Layer | Benefit to Application Support | Technology Used
+Automatic Primary Failover | No more manual “promote standby” calls | Data Guard Fast-Start Failover (FSFO)
+Seamless User Session Continuation | Users don’t see ORA-errors during outage | Transparent Application Continuity (TAC)
+Patch / Upgrade with No Outage | No maintenance windows to coordinate with users | Transient Logical Standby (Rolling Upgrade)
+Read/Write Routing & Service Placement | Apps don’t need location awareness | Global Services & Service Management
+}
+}
+@enduml

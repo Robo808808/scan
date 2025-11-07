@@ -1,0 +1,13 @@
+@startuml
+salt
+{
+{T
++ Area | What Needs to Change | Why
+Connection Strings | Must use **services**, not hostnames or SIDs | So sessions can move between nodes/standbys
+Connection Pools | Must allow **transparent reconnect** | So failover does not break user sessions
+Transaction Behavior | Should avoid **non-deterministic writes** inside business ops | So TAC can safely replay during failover
+Error Handling | Replace “connection dropped” logic with **retry/continue** semantics | To avoid needless service disruption
+Deployment & Testing | Include **failover drills** in UAT | Confidence + no surprises in prod
+}
+}
+@enduml

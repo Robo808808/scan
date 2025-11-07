@@ -1,0 +1,16 @@
+@startuml
+salt
+{
+{T
++ Operation / Pattern | Replayable by TAC/AC | Why
+INSERT/UPDATE/DELETE with fixed bound values, no external effects | Yes | Same inputs ⇒ same outcome; safe to repeat
+SELECT/queries without session randomness | Yes | Read-only or deterministic state
+Use of sequences (NEXTVAL) in business keys | Often No | Replaying creates new values ⇒ duplicates
+Use of SYSDATE/SYSTIMESTAMP/random/UUID in persisted columns | Often No | Second run changes data ⇒ non-deterministic
+Autonomous transactions | No | Commit independently; cannot be replayed safely
+External side-effects (emails, files, HTTP calls, MQ publish) inside txn | No | Replay would duplicate side-effects
+Session-dependent state not captured by driver/service | No | State mismatch on replay
+Tools like sqlplus | No | Not AC/TAC-enabled by design
+}
+}
+@enduml

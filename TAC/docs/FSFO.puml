@@ -1,0 +1,18 @@
+@startuml
+salt
+{
+{T
++ Property | What it controls | Typical Default | Example (DGMGRL)
+FastStartFailoverThreshold | Wait after loss of primary before auto-failover (seconds) | 30 | EDIT CONFIGURATION SET PROPERTY FastStartFailoverThreshold=57;
+ObserverPingInterval | How often the observer pings the primary (ms) | 1000 | EDIT CONFIGURATION SET PROPERTY ObserverPingInterval=1000;
+ObserverPingRetry | Number of failed pings before declaring primary "down" | 3 | EDIT CONFIGURATION SET PROPERTY ObserverPingRetry=3;
+ObserverReconnect | Periodic reconnect test to detect "can't create new sessions" (seconds) | 0 | EDIT CONFIGURATION SET PROPERTY ObserverReconnect=60;
+CommunicationTimeout | Broker RPC/network timeout between members (seconds) | 180 | EDIT CONFIGURATION SET PROPERTY CommunicationTimeout=240;
+ObserverOverride | Allow failover when observer lost contact even if standby still sees primary | FALSE | EDIT CONFIGURATION SET PROPERTY ObserverOverride='TRUE';
+FastStartFailoverLagType | Lag type used for failover gate (APPLY or TRANSPORT) | APPLY | EDIT CONFIGURATION SET PROPERTY FastStartFailoverLagType='APPLY';
+FastStartFailoverLagLimit | Max allowed lag for auto-failover (seconds) | 30 | EDIT CONFIGURATION SET PROPERTY FastStartFailoverLagLimit=1;
+FastStartFailoverLagGraceTime | Grace window before enforcing lag limit (seconds) | 0 | EDIT CONFIGURATION SET PROPERTY FastStartFailoverLagGraceTime=15;
+FastStartFailoverAutoReinstate | Auto-recreate failed primary as standby after failover | TRUE | EDIT CONFIGURATION SET PROPERTY FastStartFailoverAutoReinstate='TRUE';
+}
+}
+@enduml

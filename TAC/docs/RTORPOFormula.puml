@@ -1,0 +1,15 @@
+@startuml
+salt
+{
+{T
++ Objective | Controlled By | Formula / Rule | Parameter(s) to Set
+RTO (Time to Failover) | Observer detection + failover delay | RTO ≈ (ObserverPingInterval × ObserverPingRetry) + FastStartFailoverThreshold | ObserverPingInterval, ObserverPingRetry, FastStartFailoverThreshold
+RPO (Data Loss Tolerance) | Redo transport & apply lag limit | RPO ≈ APPLY_LAG; enforce with lag limit | FastStartFailoverLagLimit, FastStartFailoverLagType
+Zero / Near-Zero Data Loss | Use SYNC + AFFIRM to primary-protection standby | Commit waits for redo receipt | LOG_ARCHIVE_DEST / RedoRoutes config
+Standby Selection Priority | Failover targets ordered by desirability | Local SYNC standby should be first | FastStartFailoverTarget='stby_local,dr1,dr2'
+Avoid Split-Brain | Ensure old primary shuts down if isolated | Shutdown stale primary on threshold expiry | FastStartFailoverPmyShutdown=TRUE (optional)
+Silent “Database is up but cannot create new sessions” failures | Detect via periodic reconnect test | Forces capability validation | ObserverReconnect=60
+Replay Feasibility | SQL must be deterministic | If replay would change outcome → disable replay | Use acchk to evaluate workload determinism
+}
+}
+@enduml

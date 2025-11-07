@@ -1,0 +1,12 @@
+@startuml
+salt
+{
+{T
++ Without App Changes | Impact
+Connections tied to a single DB host | Failures = application outages
+Non-deterministic writes (e.g., timestamp + sequence mixes) | TAC cannot replay → errors during failover
+Connection pools not configured for FAN | Failover takes **minutes** instead of seconds
+No failover testing in UAT | Outages still require “war rooms”
+}
+}
+@enduml

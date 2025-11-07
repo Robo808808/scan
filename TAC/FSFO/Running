@@ -1,0 +1,61 @@
+DGMGRL> START OBSERVER FILE=/u01/app/obs/prim.cfg;
+
+dgmgrl -silent /u01/app/obs/prim.cfg &
+
+nohup dgmgrl -silent /u01/app/obs/prim.cfg > /u01/app/obs/observer.log 2>&1 &
+
+screen -S observer
+dgmgrl -silent /u01/app/obs/prim.cfg
+# Ctrl-A, Ctrl-D to detach
+
+CONNECT sys@<primary-service-or-host>
+CONNECT sys@<standby-service-or-host>
+...
+
+
+mkdir -p /u01/app/oracle/wallet
+mkstore -wrl /u01/app/oracle/wallet -create
+mkstore -wrl /u01/app/oracle/wallet -createCredential <connect_name> sys <password>
+
+
+mkstore -wrl /u01/app/oracle/wallet -createCredential br_tac_svc sys MySecretPassword
+
+
+WALLET_LOCATION = (SOURCE=(METHOD=FILE)(METHOD_DATA=(DIRECTORY=/u01/app/oracle/wallet)))
+SQLNET.WALLET_OVERRIDE = TRUE
+
+sqlplus /@br_tac_svc
+
+
+CONFIGURATION=my_db_config_name
+CONNECT /@br_tac_svc
+
+
+[Unit]
+Description=Data Guard Observer
+After=network.target
+
+[Service]
+User=oracle
+Environment="ORACLE_HOME=/u01/app/oracle/product/19c/dbhome_1"
+Environment="ORACLE_SID=IGNORE"
+Environment="TNS_ADMIN=/u01/app/oracle/network/admin"
+ExecStart=/u01/app/oracle/product/19c/dbhome_1/bin/dgmgrl -silent /u01/app/obs/prim.cfg
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
+
+
+systemctl daemon-reload
+systemctl enable dgmgrl-observer
+systemctl start dgmgrl-observer
+
+
+systemctl status dgmgrl-observer
+
+
+
+SHOW OBSERVER;
+SHOW FAST_START FAILOVER;

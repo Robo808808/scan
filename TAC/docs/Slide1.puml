@@ -1,0 +1,13 @@
+@startuml
+salt
+{
+{T
++ Today | Desired State (Target)
+Apps connect to a **host or instance** | Apps connect to **services** (logical, portable)
+Users see errors during failover or maintenance | Failovers are **invisible** to users (TAC replay)
+Outages cause operational escalations | Database events handled **automatically** (FSFO)
+Patch windows require downtime or user impact | Patching done **online** (Transient Logical / rolling upgrades)
+Responsibility unclear during incidents | Clear separation: DB handles resilience, Apps handle logical workflow only
+}
+}
+@enduml

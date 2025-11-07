@@ -1,0 +1,18 @@
+@startuml
+salt
+{
+{T
++ Area | Requirement | Example / How to Verify
+Client Connection URL | Must connect to a **SERVICE**, not a SID | jdbc:oracle:thin:@//scan:1521/app_rw
+Service Configuration | Service must enable replay | DBMS_SERVICE.MODIFY_SERVICE(... failover_type => 'TRANSACTION', commit_outcome => TRUE);
+Service Notifications | FAN / AQ HA notifications must be enabled | aq_ha_notifications = TRUE
+Protection Mode | Primary/local standby must be synchronous to avoid replay gaps | Data Guard MAX AVAILABILITY + SYNC transport
+JDBC Driver Version | 18c / 19c / 21c JDBC Thin driver | Check jar: oracle.jdbc.driver.OracleDriver version
+Replay Option Enabled | Enable AC/TAC replay support | oracle.jdbc.enableACSupport=true
+Connection Pool | UCP or WebLogic Active GridLink recommended | UCP: implicit replay enabled when service supports TAC
+Deterministic Workload | SQL + PL/SQL must be replay-safe (no non-deterministic operations) | Use acchk to validate, avoid sysdate/uuid in persisted columns
+External Effects | Avoid non-database side-effects inside transactions | Move emails, MQ publishes, HTTP calls **after COMMIT**
+Application Testing | Perform a **real switchover** test during workload | Expect: no user-visible errors, transparent continuation
+}
+}
+@enduml

@@ -1,0 +1,15 @@
+@startuml
+salt
+{
+{T
++ Concept | Plain Meaning | Why It Matters
+Service | A named entry point for the application to connect to the database | TAC works only when applications connect to **services**, not directly to a database instance
+Replay | The ability to repeat a user request if something breaks | Makes outages **invisible** to end-users
+Deterministic Work | The work does the **same thing** if safely repeated | TAC only replays work when it is safe and will not cause duplicates or mistakes
+Transparent | No code changes required in the application | TAC protects apps **without developers needing to modify them**
+Failover | Switching to a standby database when needed | TAC makes this switch **seamless**, so users don't notice
+Limitations | Not all work is replayable, e.g., sending emails, generating new IDs, timestamps | Protects correctness — avoids doing an action twice
+Benefits | Fewer errors, fewer user disruptions, smoother maintenance windows | Operations teams can perform planned changes **without downtime**
+}
+}
+@enduml

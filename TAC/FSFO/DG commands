@@ -1,0 +1,136 @@
+
+DGMGRL> SHOW FAST_START FAILOVER;
+SELECT * FROM V$FAST_START_FAILOVER_CONFIG;
+
+
+1. Understanding What Controls RTO and RPO in FSFO
+Objective	                            Controlled By	                                  Parameter(s)
+RTO = how quickly the failover occurs	Observer failure detection + failover threshold	  ObserverPingInterval, ObserverPingRetry, FastStartFailoverThreshold
+RPO = max data loss allowed	            Redo transport & apply lag limits	              FastStartFailoverLagLimit, FastStartFailoverLagType, Data Guard Protection Mode
+
+RTO Formula
+RTO ≈ (ObserverPingInterval × ObserverPingRetry) + FastStartFailoverThreshold
+RPO ≈ Redo Apply Lag (Apply_Lag)
+FastStartFailoverLagLimit ≤ RPO
+FastStartFailoverLagLimit = 1
+FastStartFailoverLagType = APPLY
+
+
+✅ 3. Plugging Your Values (RTO = 60s, RPO = 1s)
+Choose Observer Ping Tuning
+
+ObserverPingInterval = 1 second
+ObserverPingRetry = 3
+1s × 3 = 3 seconds to detect failure
+FastStartFailoverThreshold = 60 - 3 = 57
+
+✅ 4. Apply the Settings in DGMGRL
+DGMGRL> EDIT CONFIGURATION SET PROPERTY ObserverPingInterval=1000;      -- 1s
+DGMGRL> EDIT CONFIGURATION SET PROPERTY ObserverPingRetry=3;
+DGMGRL> EDIT CONFIGURATION SET PROPERTY FastStartFailoverThreshold=57;
+
+DGMGRL> EDIT CONFIGURATION SET PROPERTY FastStartFailoverLagType='APPLY';
+DGMGRL> EDIT CONFIGURATION SET PROPERTY FastStartFailoverLagLimit=1;
+
+DGMGRL> ENABLE FAST_START FAILOVER;
+
+
+✅ 5. Do We Need to Change Oracle Protection Mode?
+To reliably achieve RPO = 1s, you should be running:
+Data Guard Protection Mode = Maximum Availability (SYNC)
+
+DGMGRL> EDIT DATABASE *primary* SET PROPERTY LogXptMode='SYNC';
+DGMGRL> EDIT CONFIGURATION SET PROTECTION MODE AS MAXAVAILABILITY;
+
+1) Transport & protection mode
+
+-- Ensure SRLs exist on all standbys (size = online redo)
+-- (run per standby if not already created)
+-- ALTER DATABASE ADD STANDBY LOGFILE ... ;  -- size/number per your redo rate
+
+-- Primary -> Local (same DC) : SYNC AFFIRM
+ALTER SYSTEM SET LOG_ARCHIVE_DEST_2=
+  'SERVICE=stby_local SYNC AFFIRM COMPRESSION=ENABLE NET_TIMEOUT=5 REOPEN=5 VALID_FOR=(ONLINE_LOGFILE,PRIMARY_ROLE) DB_UNIQUE_NAME=stby_local'
+  SCOPE=BOTH;
+
+-- Primary -> DR1 : ASYNC
+ALTER SYSTEM SET LOG_ARCHIVE_DEST_3=
+  'SERVICE=stby_dr1 ASYNC NOAFFIRM COMPRESSION=ENABLE NET_TIMEOUT=10 REOPEN=60 VALID_FOR=(ONLINE_LOGFILE,PRIMARY_ROLE) DB_UNIQUE_NAME=stby_dr1'
+  SCOPE=BOTH;
+
+-- Primary -> DR2 : ASYNC
+ALTER SYSTEM SET LOG_ARCHIVE_DEST_4=
+  'SERVICE=stby_dr2 ASYNC NOAFFIRM COMPRESSION=ENABLE NET_TIMEOUT=10 REOPEN=60 VALID_FOR=(ONLINE_LOGFILE,PRIMARY_ROLE) DB_UNIQUE_NAME=stby_dr2'
+  SCOPE=BOTH;
+
+-- Real-time apply on standbys (on each standby):
+-- ALTER DATABASE RECOVER MANAGED STANDBY DATABASE USING CURRENT LOGFILE DISCONNECT FROM SESSION;
+
+2) Broker routes (role-aware) and protection mode
+DGMGRL> CONNECT sys@prim
+
+-- Role-aware redo routes (example pattern):
+DGMGRL> EDIT DATABASE 'prim' SET PROPERTY RedoRoutes=
+  '(prim:stby_local SYNC, prim:stby_dr1 ASYNC, prim:stby_dr2 ASYNC)';
+
+DGMGRL> EDIT DATABASE 'stby_local' SET PROPERTY RedoRoutes=
+  '(stby_local:prim SYNC, stby_local:stby_dr1 ASYNC, stby_local:stby_dr2 ASYNC)';
+
+DGMGRL> EDIT DATABASE 'stby_dr1' SET PROPERTY RedoRoutes=
+  '(stby_dr1:stby_local ASYNC, stby_dr1:stby_dr2 ASYNC)';
+
+DGMGRL> EDIT DATABASE 'stby_dr2' SET PROPERTY RedoRoutes=
+  '(stby_dr2:stby_local ASYNC, stby_dr2:stby_dr1 ASYNC)';
+
+-- Protection mode for zero/near-zero loss locally
+DGMGRL> EDIT CONFIGURATION SET PROTECTION MODE AS MAXAVAILABILITY;
+
+3) FSFO detection & loss guard (RTO/RPO objectives)
+-- Detection
+DGMGRL> EDIT CONFIGURATION SET PROPERTY ObserverPingInterval=1000;   -- 1s
+DGMGRL> EDIT CONFIGURATION SET PROPERTY ObserverPingRetry=3;         -- 3s detect
+DGMGRL> EDIT CONFIGURATION SET PROPERTY FastStartFailoverThreshold=57;
+
+-- RPO <= 1s
+DGMGRL> EDIT CONFIGURATION SET PROPERTY FastStartFailoverLagType='APPLY';
+DGMGRL> EDIT CONFIGURATION SET PROPERTY FastStartFailoverLagLimit=1;
+
+-- Extra resilience (recommended)
+DGMGRL> EDIT CONFIGURATION SET PROPERTY ObserverReconnect=60;        -- detect “can’t create new sessions”
+DGMGRL> EDIT CONFIGURATION SET PROPERTY CommunicationTimeout=240;    -- broker RPC guard
+DGMGRL> EDIT CONFIGURATION SET PROPERTY FastStartFailoverAutoReinstate='TRUE';
+
+4) Choose the fast-start failover targets (priority order)
+-- Allow broker to pick among multiple candidates; place local first
+DGMGRL> EDIT DATABASE 'prim' SET PROPERTY FastStartFailoverTarget='stby_local,stby_dr1,stby_dr2';
+
+8) Quick status & validation
+
+DGMGRL> SHOW CONFIGURATION;
+DGMGRL> SHOW FAST_START FAILOVER;
+DGMGRL> SHOW DATABASE prim InconsistentProperties;
+DGMGRL> SHOW DATABASE stby_local InconsistentProperties;
+
+-- Live lag checks
+SQL> SELECT name, apply_lag, transport_lag FROM v$dataguard_stats;
+
+FSFO (config-wide):
+
+EDIT CONFIGURATION SET PROPERTY ObserverPingInterval=1000;
+EDIT CONFIGURATION SET PROPERTY ObserverPingRetry=3;
+EDIT CONFIGURATION SET PROPERTY FastStartFailoverThreshold=57;
+EDIT CONFIGURATION SET PROPERTY FastStartFailoverLagType='APPLY';
+EDIT CONFIGURATION SET PROPERTY FastStartFailoverLagLimit=1;
+EDIT CONFIGURATION SET PROPERTY ObserverReconnect=60;
+EDIT CONFIGURATION SET PROPERTY CommunicationTimeout=240;
+EDIT CONFIGURATION SET PROPERTY FastStartFailoverAutoReinstate='TRUE';
+
+Prioritise targets:
+EDIT DATABASE 'prim' SET PROPERTY FastStartFailoverTarget='stby_local,stby_dr1,stby_dr2';
+
+Role-aware redo routing:
+EDIT DATABASE 'prim'       SET PROPERTY RedoRoutes='(prim:stby_local SYNC, prim:stby_dr1 ASYNC, prim:stby_dr2 ASYNC)';
+EDIT DATABASE 'stby_local' SET PROPERTY RedoRoutes='(stby_local:prim SYNC, stby_local:stby_dr1 ASYNC, stby_local:stby_dr2 ASYNC)';
+EDIT DATABASE 'stby_dr1'   SET PROPERTY RedoRoutes='(stby_dr1:stby_local ASYNC, stby_dr1:stby_dr2 ASYNC)';
+EDIT DATABASE 'stby_dr2'   SET PROPERTY RedoRoutes='(stby_dr2:stby_local ASYNC, stby_dr2:stby_dr1 ASYNC)';
+EDIT CONFIGURATION SET PROTECTION MODE AS MAXAVAILABILITY;
