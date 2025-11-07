@@ -1,16 +1,25 @@
-@startuml
-salt
-{
-{T
-+ Operation / Pattern | Replayable by TAC/AC | Why
-INSERT/UPDATE/DELETE with fixed bound values, no external effects | Yes | Same inputs ⇒ same outcome; safe to repeat
-SELECT/queries without session randomness | Yes | Read-only or deterministic state
-Use of sequences (NEXTVAL) in business keys | Often No | Replaying creates new values ⇒ duplicates
-Use of SYSDATE/SYSTIMESTAMP/random/UUID in persisted columns | Often No | Second run changes data ⇒ non-deterministic
-Autonomous transactions | No | Commit independently; cannot be replayed safely
-External side-effects (emails, files, HTTP calls, MQ publish) inside txn | No | Replay would duplicate side-effects
-Session-dependent state not captured by driver/service | No | State mismatch on replay
-Tools like sqlplus | No | Not AC/TAC-enabled by design
+@startdot
+digraph G {
+  graph [rankdir=LR, bgcolor="white"];
+  node  [shape=plaintext, fontname="Segoe UI", fontsize=11];
+  edge  [style=invis];
+
+  det [label=<
+    <TABLE BORDER="1" CELLBORDER="1" CELLSPACING="0" CELLPADDING="6">
+      <TR BGCOLOR="#f2f2f2">
+        <TD ALIGN="left" VALIGN="top" WIDTH="360"><B>Operation / Pattern</B></TD>
+        <TD ALIGN="left" VALIGN="top" WIDTH="140"><B>Replayable?</B></TD>
+        <TD ALIGN="left" VALIGN="top" WIDTH="720"><B>Why</B></TD>
+      </TR>
+      <TR><TD>INSERT/UPDATE/DELETE with fixed bind values</TD><TD>Yes</TD><TD>Same inputs ⇒ same outcome; safe to repeat</TD></TR>
+      <TR><TD>SELECT without session randomness</TD><TD>Yes</TD><TD>Read-only or deterministic state</TD></TR>
+      <TR><TD>Sequences (NEXTVAL) as business keys</TD><TD>Often No</TD><TD>Replay generates new values ⇒ duplicates</TD></TR>
+      <TR><TD>SYSDATE/SYSTIMESTAMP/UUID/random in committed data</TD><TD>Often No</TD><TD>Second run changes values ⇒ non-deterministic</TD></TR>
+      <TR><TD>Autonomous transactions</TD><TD>No</TD><TD>Independent commit; cannot be replayed safely</TD></TR>
+      <TR><TD>External side-effects (email/files/HTTP/MQ)</TD><TD>No</TD><TD>Replay would duplicate external actions</TD></TR>
+      <TR><TD>Session state not captured by driver/service</TD><TD>No</TD><TD>State mismatch on replay</TD></TR>
+      <TR><TD>Tools like sqlplus</TD><TD>No</TD><TD>Not AC/TAC-enabled by design</TD></TR>
+    </TABLE>
+  >];
 }
-}
-@enduml
+@enddot

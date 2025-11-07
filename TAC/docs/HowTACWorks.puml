@@ -1,15 +1,52 @@
-@startuml
-salt
-{
-{T
-+ Concept | Plain Meaning | Why It Matters
-Service | A named entry point for the application to connect to the database | TAC works only when applications connect to **services**, not directly to a database instance
-Replay | The ability to repeat a user request if something breaks | Makes outages **invisible** to end-users
-Deterministic Work | The work does the **same thing** if safely repeated | TAC only replays work when it is safe and will not cause duplicates or mistakes
-Transparent | No code changes required in the application | TAC protects apps **without developers needing to modify them**
-Failover | Switching to a standby database when needed | TAC makes this switch **seamless**, so users don't notice
-Limitations | Not all work is replayable, e.g., sending emails, generating new IDs, timestamps | Protects correctness — avoids doing an action twice
-Benefits | Fewer errors, fewer user disruptions, smoother maintenance windows | Operations teams can perform planned changes **without downtime**
+@startdot
+digraph G {
+  graph [rankdir=LR, bgcolor="white"];
+  node  [shape=plaintext, fontname="Segoe UI", fontsize=11];
+  edge  [style=invis];
+
+  tac [label=<
+    <TABLE BORDER="1" CELLBORDER="1" CELLSPACING="0" CELLPADDING="6">
+      <TR BGCOLOR="#f2f2f2">
+        <TD ALIGN="left" VALIGN="top" WIDTH="220"><B>Concept</B></TD>
+        <TD ALIGN="left" VALIGN="top" WIDTH="420"><B>Plain Meaning</B></TD>
+        <TD ALIGN="left" VALIGN="top" WIDTH="540"><B>Why It Matters</B></TD>
+      </TR>
+      <TR>
+        <TD>Service</TD>
+        <TD>A named entry point for the application to connect to the database</TD>
+        <TD>TAC works only when applications connect to services, not directly to a database instance</TD>
+      </TR>
+      <TR>
+        <TD>Replay</TD>
+        <TD>The ability to repeat a user request if something breaks</TD>
+        <TD>Makes outages invisible to end-users</TD>
+      </TR>
+      <TR>
+        <TD>Deterministic Work</TD>
+        <TD>The work does the same thing if safely repeated</TD>
+        <TD>TAC only replays work when it is safe and will not cause duplicates or mistakes</TD>
+      </TR>
+      <TR>
+        <TD>Transparent</TD>
+        <TD>No code changes required in the application</TD>
+        <TD>TAC protects apps without developers needing to modify them</TD>
+      </TR>
+      <TR>
+        <TD>Failover</TD>
+        <TD>Switching to a standby database when needed</TD>
+        <TD>TAC makes this switch seamless, so users don’t notice</TD>
+      </TR>
+      <TR>
+        <TD>Limitations</TD>
+        <TD>Not all work is replayable (e.g., sending emails, generating new IDs, timestamps)</TD>
+        <TD>Protects correctness — avoids doing an action twice</TD>
+      </TR>
+      <TR>
+        <TD>Benefits</TD>
+        <TD>Fewer errors, fewer user disruptions, smoother maintenance windows</TD>
+        <TD>Enables planned changes without downtime</TD>
+      </TR>
+    </TABLE>
+  >];
 }
-}
-@enduml
+@enddot

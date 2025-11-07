@@ -1,15 +1,60 @@
-@startuml
-salt
-{
-{T
-+ Objective | Controlled By | Formula / Rule | Parameter(s) to Set
-RTO (Time to Failover) | Observer detection + failover delay | RTO ≈ (ObserverPingInterval × ObserverPingRetry) + FastStartFailoverThreshold | ObserverPingInterval, ObserverPingRetry, FastStartFailoverThreshold
-RPO (Data Loss Tolerance) | Redo transport & apply lag limit | RPO ≈ APPLY_LAG; enforce with lag limit | FastStartFailoverLagLimit, FastStartFailoverLagType
-Zero / Near-Zero Data Loss | Use SYNC + AFFIRM to primary-protection standby | Commit waits for redo receipt | LOG_ARCHIVE_DEST / RedoRoutes config
-Standby Selection Priority | Failover targets ordered by desirability | Local SYNC standby should be first | FastStartFailoverTarget='stby_local,dr1,dr2'
-Avoid Split-Brain | Ensure old primary shuts down if isolated | Shutdown stale primary on threshold expiry | FastStartFailoverPmyShutdown=TRUE (optional)
-Silent “Database is up but cannot create new sessions” failures | Detect via periodic reconnect test | Forces capability validation | ObserverReconnect=60
-Replay Feasibility | SQL must be deterministic | If replay would change outcome → disable replay | Use acchk to evaluate workload determinism
+@startdot
+digraph G {
+  graph [rankdir=LR, bgcolor="white"];
+  node  [shape=plaintext, fontname="Segoe UI", fontsize=11];
+  edge  [style=invis];
+
+  rto [label=<
+    <TABLE BORDER="1" CELLBORDER="1" CELLSPACING="0" CELLPADDING="6">
+      <TR BGCOLOR="#f2f2f2">
+        <TD ALIGN="left" VALIGN="top" WIDTH="220"><B>Objective</B></TD>
+        <TD ALIGN="left" VALIGN="top" WIDTH="340"><B>Controlled By</B></TD>
+        <TD ALIGN="left" VALIGN="top" WIDTH="380"><B>Formula / Rule</B></TD>
+        <TD ALIGN="left" VALIGN="top" WIDTH="240"><B>Parameters to Set</B></TD>
+      </TR>
+      <TR>
+        <TD>RTO (failover time)</TD>
+        <TD>Observer detection + failover threshold</TD>
+        <TD><FONT FACE="Consolas">RTO ≈ (PingInterval × PingRetry) + FSFO_Threshold</FONT></TD>
+        <TD><FONT FACE="Consolas">ObserverPingInterval, ObserverPingRetry, FastStartFailoverThreshold</FONT></TD>
+      </TR>
+      <TR>
+        <TD>RPO (data loss)</TD>
+        <TD>Redo transport &amp; apply lag gate</TD>
+        <TD><FONT FACE="Consolas">RPO ≈ APPLY_LAG; enforce with LagLimit</FONT></TD>
+        <TD><FONT FACE="Consolas">FastStartFailoverLagLimit, FastStartFailoverLagType</FONT></TD>
+      </TR>
+      <TR>
+        <TD>Zero / Near-zero loss</TD>
+        <TD>SYNC + AFFIRM to local standby</TD>
+        <TD>Commit waits for remote receipt/flush</TD>
+        <TD><FONT FACE="Consolas">RedoRoutes / LOG_ARCHIVE_DESTx (SYNC/AFFIRM)</FONT></TD>
+      </TR>
+      <TR>
+        <TD>Failover target priority</TD>
+        <TD>Designated target ordering</TD>
+        <TD>Prefer local SYNC standby first</TD>
+        <TD><FONT FACE="Consolas">FastStartFailoverTarget</FONT></TD>
+      </TR>
+      <TR>
+        <TD>Split-brain avoidance</TD>
+        <TD>Primary shutdown on isolation</TD>
+        <TD>Shut down old primary after threshold</TD>
+        <TD><FONT FACE="Consolas">FastStartFailoverPmyShutdown (optional)</FONT></TD>
+      </TR>
+      <TR>
+        <TD>Silent “can’t create session” fault</TD>
+        <TD>Periodic reconnect test</TD>
+        <TD>Validates new session creation path</TD>
+        <TD><FONT FACE="Consolas">ObserverReconnect</FONT></TD>
+      </TR>
+      <TR>
+        <TD>Replay feasibility</TD>
+        <TD>Deterministic workload</TD>
+        <TD>Disable replay if outcome would differ</TD>
+        <TD><FONT FACE="Consolas">acchk; code review</FONT></TD>
+      </TR>
+    </TABLE>
+  >];
 }
-}
-@enduml
+@enddot

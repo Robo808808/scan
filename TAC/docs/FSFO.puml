@@ -1,18 +1,28 @@
-@startuml
-salt
-{
-{T
-+ Property | What it controls | Typical Default | Example (DGMGRL)
-FastStartFailoverThreshold | Wait after loss of primary before auto-failover (seconds) | 30 | EDIT CONFIGURATION SET PROPERTY FastStartFailoverThreshold=57;
-ObserverPingInterval | How often the observer pings the primary (ms) | 1000 | EDIT CONFIGURATION SET PROPERTY ObserverPingInterval=1000;
-ObserverPingRetry | Number of failed pings before declaring primary "down" | 3 | EDIT CONFIGURATION SET PROPERTY ObserverPingRetry=3;
-ObserverReconnect | Periodic reconnect test to detect "can't create new sessions" (seconds) | 0 | EDIT CONFIGURATION SET PROPERTY ObserverReconnect=60;
-CommunicationTimeout | Broker RPC/network timeout between members (seconds) | 180 | EDIT CONFIGURATION SET PROPERTY CommunicationTimeout=240;
-ObserverOverride | Allow failover when observer lost contact even if standby still sees primary | FALSE | EDIT CONFIGURATION SET PROPERTY ObserverOverride='TRUE';
-FastStartFailoverLagType | Lag type used for failover gate (APPLY or TRANSPORT) | APPLY | EDIT CONFIGURATION SET PROPERTY FastStartFailoverLagType='APPLY';
-FastStartFailoverLagLimit | Max allowed lag for auto-failover (seconds) | 30 | EDIT CONFIGURATION SET PROPERTY FastStartFailoverLagLimit=1;
-FastStartFailoverLagGraceTime | Grace window before enforcing lag limit (seconds) | 0 | EDIT CONFIGURATION SET PROPERTY FastStartFailoverLagGraceTime=15;
-FastStartFailoverAutoReinstate | Auto-recreate failed primary as standby after failover | TRUE | EDIT CONFIGURATION SET PROPERTY FastStartFailoverAutoReinstate='TRUE';
+@startdot
+digraph G {
+  graph [rankdir=LR, bgcolor="white"];
+  node  [shape=plaintext, fontname="Segoe UI", fontsize=11];
+  edge  [style=invis];
+
+  fsfo [label=<
+    <TABLE BORDER="1" CELLBORDER="1" CELLSPACING="0" CELLPADDING="6">
+      <TR BGCOLOR="#f2f2f2">
+        <TD ALIGN="left" VALIGN="top" WIDTH="220"><B>Property</B></TD>
+        <TD ALIGN="left" VALIGN="top" WIDTH="420"><B>What it controls</B></TD>
+        <TD ALIGN="left" VALIGN="top" WIDTH="160"><B>Typical Default</B></TD>
+        <TD ALIGN="left" VALIGN="top" WIDTH="420"><B>Example (DGMGRL)</B></TD>
+      </TR>
+      <TR><TD>FastStartFailoverThreshold</TD><TD>Wait after losing primary (seconds)</TD><TD>30</TD><TD><FONT FACE="Consolas">EDIT CONFIGURATION SET PROPERTY FastStartFailoverThreshold=57;</FONT></TD></TR>
+      <TR><TD>ObserverPingInterval</TD><TD>Observer ping period (ms)</TD><TD>1000</TD><TD><FONT FACE="Consolas">EDIT CONFIGURATION SET PROPERTY ObserverPingInterval=1000;</FONT></TD></TR>
+      <TR><TD>ObserverPingRetry</TD><TD>Failed pings before declaring failure</TD><TD>3</TD><TD><FONT FACE="Consolas">EDIT CONFIGURATION SET PROPERTY ObserverPingRetry=3;</FONT></TD></TR>
+      <TR><TD>ObserverReconnect</TD><TD>Periodic reconnect test (seconds)</TD><TD>0</TD><TD><FONT FACE="Consolas">EDIT CONFIGURATION SET PROPERTY ObserverReconnect=60;</FONT></TD></TR>
+      <TR><TD>CommunicationTimeout</TD><TD>Broker network/RPC timeout (seconds)</TD><TD>180</TD><TD><FONT FACE="Consolas">EDIT CONFIGURATION SET PROPERTY CommunicationTimeout=240;</FONT></TD></TR>
+      <TR><TD>ObserverOverride</TD><TD>Allow failover on observer’s view even if standby still sees primary</TD><TD>FALSE</TD><TD><FONT FACE="Consolas">EDIT CONFIGURATION SET PROPERTY ObserverOverride='TRUE';</FONT></TD></TR>
+      <TR><TD>FastStartFailoverLagType</TD><TD>Lag metric for gate (APPLY or TRANSPORT)</TD><TD>APPLY</TD><TD><FONT FACE="Consolas">EDIT CONFIGURATION SET PROPERTY FastStartFailoverLagType='APPLY';</FONT></TD></TR>
+      <TR><TD>FastStartFailoverLagLimit</TD><TD>Max allowed lag (seconds) to permit auto-failover</TD><TD>30</TD><TD><FONT FACE="Consolas">EDIT CONFIGURATION SET PROPERTY FastStartFailoverLagLimit=1;</FONT></TD></TR>
+      <TR><TD>FastStartFailoverLagGraceTime</TD><TD>Grace window before enforcing lag limit (seconds)</TD><TD>0</TD><TD><FONT FACE="Consolas">EDIT CONFIGURATION SET PROPERTY FastStartFailoverLagGraceTime=15;</FONT></TD></TR>
+      <TR><TD>FastStartFailoverAutoReinstate</TD><TD>Auto-recreate failed primary as standby after failover</TD><TD>TRUE</TD><TD><FONT FACE="Consolas">EDIT CONFIGURATION SET PROPERTY FastStartFailoverAutoReinstate='TRUE';</FONT></TD></TR>
+    </TABLE>
+  >];
 }
-}
-@enduml
+@enddot

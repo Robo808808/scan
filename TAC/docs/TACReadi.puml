@@ -1,18 +1,27 @@
-@startuml
-salt
-{
-{T
-+ Area | Requirement | Example / How to Verify
-Client Connection URL | Must connect to a **SERVICE**, not a SID | jdbc:oracle:thin:@//scan:1521/app_rw
-Service Configuration | Service must enable replay | DBMS_SERVICE.MODIFY_SERVICE(... failover_type => 'TRANSACTION', commit_outcome => TRUE);
-Service Notifications | FAN / AQ HA notifications must be enabled | aq_ha_notifications = TRUE
-Protection Mode | Primary/local standby must be synchronous to avoid replay gaps | Data Guard MAX AVAILABILITY + SYNC transport
-JDBC Driver Version | 18c / 19c / 21c JDBC Thin driver | Check jar: oracle.jdbc.driver.OracleDriver version
-Replay Option Enabled | Enable AC/TAC replay support | oracle.jdbc.enableACSupport=true
-Connection Pool | UCP or WebLogic Active GridLink recommended | UCP: implicit replay enabled when service supports TAC
-Deterministic Workload | SQL + PL/SQL must be replay-safe (no non-deterministic operations) | Use acchk to validate, avoid sysdate/uuid in persisted columns
-External Effects | Avoid non-database side-effects inside transactions | Move emails, MQ publishes, HTTP calls **after COMMIT**
-Application Testing | Perform a **real switchover** test during workload | Expect: no user-visible errors, transparent continuation
+@startdot
+digraph G {
+  graph [rankdir=LR, bgcolor="white"];
+  node  [shape=plaintext, fontname="Segoe UI", fontsize=11];
+  edge  [style=invis];
+
+  chk [label=<
+    <TABLE BORDER="1" CELLBORDER="1" CELLSPACING="0" CELLPADDING="6">
+      <TR BGCOLOR="#f2f2f2">
+        <TD ALIGN="left" VALIGN="top" WIDTH="220"><B>Area</B></TD>
+        <TD ALIGN="left" VALIGN="top" WIDTH="420"><B>Requirement</B></TD>
+        <TD ALIGN="left" VALIGN="top" WIDTH="540"><B>Example / How to Verify</B></TD>
+      </TR>
+      <TR><TD>Client Connection URL</TD><TD>Connect to a service, not a SID</TD><TD><FONT FACE="Consolas">jdbc:oracle:thin:@//scan:1521/br_tac_svc</FONT></TD></TR>
+      <TR><TD>Service Configuration</TD><TD>Enable replay on the service</TD><TD><FONT FACE="Consolas">DBMS_SERVICE.MODIFY_SERVICE(... failover_type =&gt; 'TRANSACTION', commit_outcome =&gt; TRUE);</FONT></TD></TR>
+      <TR><TD>Service Notifications</TD><TD>FAN / AQ HA notifications enabled</TD><TD><FONT FACE="Consolas">aq_ha_notifications = TRUE</FONT></TD></TR>
+      <TR><TD>Protection Mode</TD><TD>SYNC to local standby for minimal loss</TD><TD>Data Guard MAX AVAILABILITY + SYNC transport</TD></TR>
+      <TR><TD>JDBC/Client Version</TD><TD>19c+ JDBC Thin / recent ODP.NET / python-oracledb (Thick)</TD><TD>Check driver/client library versions</TD></TR>
+      <TR><TD>Replay Option</TD><TD>Enable AC/TAC on client</TD><TD><FONT FACE="Consolas">oracle.jdbc.enableACSupport=true</FONT> (JDBC)</TD></TR>
+      <TR><TD>Connection Pool</TD><TD>UCP / WebLogic AGL; transparent reconnect</TD><TD>Ensure pooling + FAN enabled</TD></TR>
+      <TR><TD>Deterministic Workload</TD><TD>Replay-safe SQL/PLSQL</TD><TD>Run <B>acchk</B>, avoid non-deterministic writes</TD></TR>
+      <TR><TD>External Effects</TD><TD>Keep outside transaction commit</TD><TD>Send emails/MQ <I>after</I> COMMIT</TD></TR>
+      <TR><TD>Testing</TD><TD>UAT failover drill</TD><TD>Perform Data Guard switchover during workload, expect no user errors</TD></TR>
+    </TABLE>
+  >];
 }
-}
-@enduml
+@enddot
