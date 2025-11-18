@@ -4,6 +4,7 @@ FASTAPI_URL="https://central.server.example.com/submit"
 HOSTNAME=$(hostname -s)
 PAYLOAD="[]"
 
+
 function add_result() {
   local sid="$1"
   local pdb="$2"
