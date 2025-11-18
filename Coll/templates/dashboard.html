@@ -1,0 +1,43 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>DB Configuration Dashboard</title>
+    <style>
+        body { font-family: Arial; margin: 20px; }
+        table { border-collapse: collapse; width: 100%; }
+        th, td { border: 1px solid #ccc; padding: 6px; }
+        th { background: #f0f0f0; }
+        tr.fail { background-color: #ffcccc; }
+        tr.pass { background-color: #e6ffe6; }
+        tr.info { background-color: #e6f0ff; }
+    </style>
+</head>
+<body>
+<h2>Database Configuration Dashboard</h2>
+
+<table>
+    <tr>
+        <th>Hostname</th>
+        <th>SID</th>
+        <th>PDB</th>
+        <th>Check</th>
+        <th>Result</th>
+        <th>Status</th>
+        <th>Timestamp</th>
+    </tr>
+
+    {% for r in rows %}
+    <tr class="{{ r['status'] | lower }}">
+        <td>{{ r['hostname'] }}</td>
+        <td>{{ r['oracle_sid'] }}</td>
+        <td>{{ r['pdb_name'] }}</td>
+        <td>{{ r['check_name'] }}</td>
+        <td>{{ r['result'] }}</td>
+        <td>{{ r['status'] }}</td>
+        <td>{{ r['timestamp'] }}</td>
+    </tr>
+    {% endfor %}
+</table>
+
+</body>
+</html>
