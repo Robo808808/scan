@@ -1,93 +1,75 @@
 #!/usr/bin/env bash
-set -euo pipefail
+set -eu
 
-FASTAPI_URL="https://your-fastapi-server/api/submit"   # URL of your FastAPI endpoint
-HOSTNAME=$(hostname -s)
+FASTAPI_URL="https://your-fastapi-server/api/submit"   # change to your endpoint
+OUT="/tmp/sys_logons_all_hosts.csv"
 ORATAB="/etc/oratab"
-MAX_FILES=800     # per SID
-TMP="/tmp/sys_remote_logons_$$.csv"
+MAX=800    # max audit files per SID
 
-echo "hostname,sid,timestamp,file,client_address,program,auth_method" > "$TMP"
+HOSTNAME=$(hostname -s)
+
+echo "hostname,sid,timestamp,file,database_user,client_address,client_user,status,action" > "$OUT"
 
 parse_aud() {
-  local SID="$1" FILE="$2"
-  awk -v SID="$SID" -v H="$HOSTNAME" -v FILE="$FILE" '
+  SID="$1"
+  FILE="$2"
+  awk -v FILE="$FILE" -v SID="$SID" -v H="$HOSTNAME" '
     BEGIN { RS=""; FS="\n" }
     {
-      ts=""; dbu=""; addr=""; cuser=""; prog=""; status=""
+      ts = $1; dbu = ""; addr = ""; cuser = ""; status = ""; act = ""
 
-      # First line = timestamp (Oracle always prints it on top)
-      ts=$1
+      for (i = 1; i <= NF; i++) {
+        line = $i
+        gsub(/^[ \t]+|[ \t]+$/, "", line)
 
-      for (i=1; i<=NF; i++) {
-        line=$i
-        gsub(/^[ \t]+|[ \t]+$/,"",line)
-
-        if (toupper(line) ~ /^DATABASE USER/) {
-          sub(/.*'\''/,"",line); sub(/'\''.*$/,"",line); dbu=toupper(line)
-        }
-        if (toupper(line) ~ /^CLIENT ADDRESS/) {
-          sub(/.*'\''/,"",line); sub(/'\''.*$/,"",line); addr=line
-        }
-        if (toupper(line) ~ /^CLIENT USER/) {
-          sub(/.*'\''/,"",line); sub(/'\''.*$/,"",line); cuser=line
-        }
-        if (toupper(line) ~ /^STATUS/) {
-          sub(/.*'\''/,"",line); sub(/'\''.*$/,"",line); status=line
-        }
-        if (toupper(line) ~ /^ACTION /) {
-          sub(/.*'\''/,"",line); sub(/'\''.*$/,"",line); prog=line
-        }
+        if (toupper(line) ~ /^DATABASE USER/) { n = split(line,a,"'\''"); if (n>=2) dbu=toupper(a[2]) }
+        if (toupper(line) ~ /^CLIENT ADDRESS/) { n = split(line,a,"'\''"); if (n>=2) addr=a[2] }
+        if (toupper(line) ~ /^CLIENT USER/) { n = split(line,a,"'\''"); if (n>=2) cuser=a[2] }
+        if (toupper(line) ~ /^STATUS/) { n = split(line,a,"'\''"); if (n>=2) status=a[2] }
+        if (toupper(line) ~ /^ACTION/) { n = split(line,a,"'\''"); if (n>=2) act=a[2] }
       }
 
-      # Filters
       if (dbu != "SYS") next
-      if (addr ~ /^[ \t]*$/) next            # no network = local logon
-      # If client user is oracle → likely OS-auth instead of password
-      if (toupper(cuser) == "ORACLE") next
+      if (addr ~ /^[ \t]*$/) next
 
-      if (prog == "") prog="unknown"
-      if (status == "") status="unknown"
-      gsub(/"/,"\"\"",ts); gsub(/"/,"\"\"",addr); gsub(/"/,"\"\"",prog); gsub(/"/,"\"\"",status)
+      gsub(/"/,"\"\"",ts); gsub(/"/,"\"\"",addr); gsub(/"/,"\"\"",cuser)
+      gsub(/"/,"\"\"",status); gsub(/"/,"\"\"",act)
 
-      printf "\"%s\",\"%s\",\"%s\",\"%s\",\"%s\",\"%s\",\"%s\"\n",
-             H, SID, ts, FILE, addr, prog, status
+      printf "\"%s\",\"%s\",\"%s\",\"%s\",\"%s\",\"%s\",\"%s\",\"%s\",\"%s\"\n",
+             H, SID, ts, FILE, dbu, addr, cuser, status, act
     }
   ' "$FILE"
 }
 
-# Discover SIDs
-mapfile -t ENTRIES < <(awk -F: 'NF>=2 && $0 !~ /^#/ {print $1":"$2}' "$ORATAB")
+# read /etc/oratab
+awk -F: 'NF>=2 && $1!~/^#/ {print $1":"$2}' "$ORATAB" | while IFS=: read -r SID HOME; do
+  export ORACLE_SID="$SID" ORACLE_HOME="$HOME" PATH="$HOME/bin:$PATH"
 
-for ent in "${ENTRIES[@]}"; do
-  SID="${ent%%:*}"
-  HOME="${ent#*:}"
-  export ORACLE_SID="$SID" ORACLE_HOME="$HOME"
-
-  AUD="$(sqlplus -S "/ as sysdba" <<EOF | awk 'NF {print $1; exit}'
-SET PAGES 0 FEEDBACK OFF HEADING OFF
+  AUD=$(sqlplus -S "/ as sysdba" <<EOF | awk 'NF{print $1; exit}'
+SET HEADING OFF FEEDBACK OFF PAGES 0
 SELECT value FROM v\$parameter WHERE name='audit_file_dest';
 EOF
-  )" || AUD=""
+  ) || AUD=""
 
-  [[ -z "$AUD" || ! -d "$AUD" ]] && continue
+  [ -d "$AUD" ] || continue
 
-  # newest files first
   count=0
-  while IFS= read -r FILE; do
-    parse_aud "$SID" "$FILE" >> "$TMP"
-    count=$((count+1))
-    [[ $count -ge $MAX_FILES ]] && break
-  done < <(find "$AUD" -type f \( -name "*.aud" -o -name "ora_*" -o -name "*.log" \))
+  find "$AUD" -type f \( -name "*.aud" -o -name "ora_*" -o -name "*.log" \) \
+    -printf "%T@ %p\n" 2>/dev/null \
+    | sort -nr \
+    | awk '{print $2}' \
+    | while read -r FILE; do
+        parse_aud "$SID" "$FILE" >> "$OUT"
+        count=$((count+1))
+        [ "$count" -ge "$MAX" ] && break
+      done
 done
 
-echo "CSV built → $TMP"
+echo "CSV ready: $OUT"
 
 # POST each row to FastAPI
-tail -n +2 "$TMP" | while IFS= read -r row; do
-  curl -s -X POST "$FASTAPI_URL" \
-    -H "Content-Type: application/json" \
-    -d "{\"hostname\":\"$HOSTNAME\",\"csv_row\":\"$row\"}" >/dev/null || true
+tail -n +2 "$OUT" | while IFS= read -r row; do
+  curl -s -X POST "$FASTAPI_URL" -H "Content-Type: application/json" -d "{\"hostname\":\"$HOSTNAME\",\"csv_row\":\"$row\"}" >/dev/null || true
 done
 
-echo "Posted to FastAPI → $FASTAPI_URL"
+echo "Posted to FastAPI: $FASTAPI_URL"
