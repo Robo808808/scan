@@ -14,36 +14,44 @@ parse_aud() {
   awk -v SID="$SID" -v H="$HOSTNAME" -v FILE="$FILE" '
     BEGIN { RS=""; FS="\n" }
     {
-      ts=""; dbu=""; addr=""; prog=""; auth=""
-      for(i=1;i<=NF;i++){
-        line=$i; gsub(/^[ \t]+|[ \t]+$/,"",line)
-        if (line ~ /^DATABASE USER *:/) {
-          split(line,a,":"); dbu=toupper(gensub(/"/,"","g",a[2]))
+      ts=""; dbu=""; addr=""; cuser=""; prog=""; status=""
+
+      # First line = timestamp (Oracle always prints it on top)
+      ts=$1
+
+      for (i=1; i<=NF; i++) {
+        line=$i
+        gsub(/^[ \t]+|[ \t]+$/,"",line)
+
+        if (toupper(line) ~ /^DATABASE USER/) {
+          sub(/.*'\''/,"",line); sub(/'\''.*$/,"",line); dbu=toupper(line)
         }
-        if (line ~ /^CLIENT ADDRESS *:/) {
-          split(line,a,":"); addr=gensub(/"/,"","g",a[2])
+        if (toupper(line) ~ /^CLIENT ADDRESS/) {
+          sub(/.*'\''/,"",line); sub(/'\''.*$/,"",line); addr=line
         }
-        if (line ~ /^TIMESTAMP *:/) {
-          split(line,a,":"); ts=gensub(/"/,"","g",a[2])
+        if (toupper(line) ~ /^CLIENT USER/) {
+          sub(/.*'\''/,"",line); sub(/'\''.*$/,"",line); cuser=line
         }
-        if (line ~ /^PROGRAM *:/ || line ~ /^CLIENT PROGRAM NAME *:/) {
-          split(line,a,":"); prog=gensub(/"/,"","g",a[2])
+        if (toupper(line) ~ /^STATUS/) {
+          sub(/.*'\''/,"",line); sub(/'\''.*$/,"",line); status=line
         }
-        if (line ~ /^AUTHENTICATION *:/) {
-          split(line,a,":"); auth=gensub(/"/,"","g",a[2])
+        if (toupper(line) ~ /^ACTION /) {
+          sub(/.*'\''/,"",line); sub(/'\''.*$/,"",line); prog=line
         }
       }
 
-      # filters: remote SYS
+      # Filters
       if (dbu != "SYS") next
-      if (addr ~ /^[ \t]*$/) next        # empty address = local
-      if (ts == "") next                 # require timestamp
+      if (addr ~ /^[ \t]*$/) next            # no network = local logon
+      # If client user is oracle → likely OS-auth instead of password
+      if (toupper(cuser) == "ORACLE") next
 
       if (prog == "") prog="unknown"
-      if (auth == "") auth="unknown"
+      if (status == "") status="unknown"
+      gsub(/"/,"\"\"",ts); gsub(/"/,"\"\"",addr); gsub(/"/,"\"\"",prog); gsub(/"/,"\"\"",status)
 
-      gsub(/"/,"\"\"",addr); gsub(/"/,"\"\"",prog); gsub(/"/,"\"\"",auth); gsub(/"/,"\"\"",ts)
-      printf "\"%s\",\"%s\",\"%s\",\"%s\",\"%s\",\"%s\",\"%s\"\n", H, SID, ts, FILE, addr, prog, auth
+      printf "\"%s\",\"%s\",\"%s\",\"%s\",\"%s\",\"%s\",\"%s\"\n",
+             H, SID, ts, FILE, addr, prog, status
     }
   ' "$FILE"
 }
