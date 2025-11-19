@@ -30,7 +30,6 @@ while getopts ":o:n:r:t:" opt; do
     r) ROW_LIMIT="$OPTARG" ;;
     t) ORATAB="$OPTARG" ;;
     *) echo "Usage: $0 [-o output.csv] [-n max_audit_files] [-r row_limit] [-t /path/to/oratab]" >&2; exit 1 ;;
-  )
   esac
 done
 
@@ -134,14 +133,23 @@ scan_aud_file(){
 
       # extract fields with regexes
       db_user=""; action=""; client_address=""; program=""; auth=""; ts=""
-      match(text, /DATABASE USER[[:space:]]*:[[:space:]]*['\"]?([A-Za-z0-9_]+)['\"]?/, m); if (m[1]!="") db_user=toupper(m[1])
-      match(text, /ACTION[[:space:]]*:[[:space:]]*'\''?([A-Za-z_ ]+)'\''?/, a); if (a[1]!="") action=toupper(trim(a[1]))
-      match(text, /CLIENT ADDRESS[[:space:]]*:[[:space:]]*(.*)$/, ca); if (ca[1]!="") client_address=trim(ca[1])
-      match(text, /CLIENT HOST[[:space:]]*:[[:space:]]*['\"]?([^\n'\"]+)['\"]?/, ch); if (ch[1]!="") client_address=trim(ch[1])
-      match(text, /PROGRAM[[:space:]]*:[[:space:]]*['\"]?([^\n'\"]+)['\"]?/, pr); if (pr[1]!="") program=trim(pr[1])
-      match(text, /CLIENT PROGRAM NAME[[:space:]]*:[[:space:]]*['\"]?([^\n'\"]+)['\"]?/, cpr); if (cpr[1]!="") program=trim(cpr[1])
-      match(text, /AUTHENTICATION[[:space:]]*:[[:space:]]*['\"]?([A-Za-z0-9_ -]+)['\"]?/, au); if (au[1]!="") auth=toupper(trim(au[1]))
-      match(text, /TIMESTAMP[[:space:]]*:[[:space:]]*['\"]?([^\n'\"]+)['\"]?/, ts1); if (ts1[1]!="") ts=trim(ts1[1])
+      match(text, /DATABASE USER[[:space:]]*:[[:space:]]*["]?([A-Za-z0-9_]+)["]?/, m)
+      if (m[1]!="") db_user=toupper(m[1])
+      match(text, /ACTION[[:space:]]*:[[:space:]]*["]?([A-Za-z_ ]+)["]?/, a)
+      if (a[1]!="") action=toupper(trim(a[1]))
+      match(text, /CLIENT ADDRESS[[:space:]]*:[[:space:]]*(.*)$/, ca)
+      if (ca[1]!="") client_address=trim(ca[1])
+      match(text, /CLIENT HOST[[:space:]]*:[[:space:]]*["]?([^\n"]+)["]?/, ch)
+      if (ch[1]!="") client_host=trim(ch[1])
+      match(text, /PROGRAM[[:space:]]*:[[:space:]]*["]?([^\n"]+)["]?/, pr)
+      if (pr[1]!="") program=trim(pr[1])
+      match(text, /CLIENT PROGRAM NAME[[:space:]]*:[[:space:]]*["]?([^\n"]+)["]?/, cpr)
+      if (cpr[1]!="") program=trim(cpr[1])
+      match(text, /AUTHENTICATION[[:space:]]*:[[:space:]]*["]?([A-Za-z0-9_ -]+)["]?/, au)
+      if (au[1]!="") auth=toupper(trim(au[1]))
+      match(text, /TIMESTAMP[[:space:]]*:[[:space:]]*["]?([^\n"]+)["]?/, ts1)
+      if (ts1[1]!="") ts=trim(ts1[1])
+
       if (db_user!="SYS" || index(action,"CONNECT")!=1) next
 
       detected_location="unknown"; detected_method="unknown"
