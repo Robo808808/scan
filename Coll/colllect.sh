@@ -40,8 +40,8 @@ exit
 EOF
 }
 
-# Loop over /etc/oratab
-grep -v '^#' /etc/oratab | grep -E ":[Y|N]$" | while IFS=: read -r SID ORA_HOME _FLAG; do
+# Loop over /etc/oratab  (FIXED: no subshell)
+while IFS=: read -r SID ORA_HOME _FLAG; do
   [ -z "$SID" ] && continue
   export ORACLE_SID="$SID"
   export ORACLE_HOME="$ORA_HOME"
@@ -104,7 +104,10 @@ EOF
     add_result "$SID" "$PDB" "sys_audit_csv" "$CSV_CONTENT" "INFO"
   fi
 
-done
+done < <(grep -v '^#' /etc/oratab | grep -E ":[Y|N]$")
+
+# Optional: debug
+# echo "$PAYLOAD"
 
 # Send one JSON payload for all DBs on host
 curl -s -X POST "$FASTAPI_URL" \
