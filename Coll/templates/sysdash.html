@@ -1,0 +1,51 @@
+<!DOCTYPE html>
+<html>
+<head>
+<title>SYS Remote Logons Dashboard</title>
+<style>
+body { font-family: Arial; margin: 20px; }
+table { border-collapse: collapse; width: 100%; }
+td, th { border: 1px solid #ccc; padding: 6px; font-size: 14px; }
+th { background: #efefef; }
+input { padding: 6px; width: 200px; margin-bottom: 12px; }
+</style>
+</head>
+<body>
+<h2>SYS Remote Logons Dashboard</h2>
+<input type="text" id="filter" placeholder="Filter..." onkeyup="filter()">
+
+<table id="tbl">
+<tr>
+  <th>Hostname</th>
+  <th>SID</th>
+  <th>Timestamp</th>
+  <th>Client Address</th>
+  <th>Client User</th>
+  <th>Status</th>
+  <th>Action</th>
+</tr>
+{% for r in rows %}
+<tr>
+  <td>{{r[0]}}</td>
+  <td>{{r[1]}}</td>
+  <td>{{r[2]}}</td>
+  <td>{{r[3]}}</td>
+  <td>{{r[4]}}</td>
+  <td>{{r[5]}}</td>
+  <td>{{r[6]}}</td>
+</tr>
+{% endfor %}
+</table>
+
+<script>
+function filter() {
+  let input = document.getElementById("filter").value.toLowerCase();
+  for (let r of document.querySelectorAll("#tbl tr")) {
+    r.style.display = Array.from(r.cells)
+      .some(td => td.innerText.toLowerCase().includes(input)) ? "" : "none";
+  }
+}
+</script>
+
+</body>
+</html>

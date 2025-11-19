@@ -68,8 +68,10 @@ done
 echo "CSV ready: $OUT"
 
 # POST each row to FastAPI
-tail -n +2 "$OUT" | while IFS= read -r row; do
-  curl -s -X POST "$FASTAPI_URL" -H "Content-Type: application/json" -d "{\"hostname\":\"$HOSTNAME\",\"csv_row\":\"$row\"}" >/dev/null || true
-done
 
-echo "Posted to FastAPI: $FASTAPI_URL"
+curl -s -X POST "$FASTAPI_URL" \
+  -H "Content-Type: multipart/form-data" \
+  -F "hostname=$HOSTNAME" \
+  -F "file=@$OUT" >/dev/null
+
+echo "Uploaded CSV to FastAPI: $FASTAPI_URL"

@@ -1,8 +1,8 @@
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, Request, UploadFile, File, Form
 from fastapi.responses import HTMLResponse
 from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel
-import sqlite3, time, hashlib
+import sqlite3, time, hashlib, csv, io
 
 DB = "central.db"
 app = FastAPI()
@@ -48,6 +48,22 @@ def init_db():
             status TEXT NOT NULL,
             hash TEXT NOT NULL,
             timestamp TEXT NOT NULL
+        );
+        """)
+
+        cur.execute("""
+        CREATE TABLE IF NOT EXISTS db_sys_audit (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            hostname TEXT NOT NULL,
+            sid TEXT NOT NULL,
+            timestamp TEXT NOT NULL,
+            file TEXT NOT NULL,
+            database_user TEXT NOT NULL,
+            client_address TEXT NOT NULL,
+            client_user TEXT NOT NULL,
+            status TEXT NOT NULL,
+            action TEXT NOT NULL,
+            UNIQUE(hostname, sid, timestamp, file)
         );
         """)
 
@@ -101,6 +117,30 @@ def submit(data: list[Assessment]):
 
     return {"received": len(data), "inserted": inserted, "updated": updated}
 
+@app.post("/upload-sys-audit")
+async def upload_sys_audit(hostname: str = Form(...), file: UploadFile = File(...)):
+    conn = sqlite3.connect(DB)
+    cur = conn.cursor()
+    reader = csv.reader(io.StringIO((await file.read()).decode()))
+    next(reader, None)  # skip header
+
+    inserted = 0
+    for row in reader:
+        (_, sid, timestamp, fname, db_user, addr, cuser, status, action) = row
+        try:
+            cur.execute("""
+                INSERT INTO db_sys_audit
+                (hostname, sid, timestamp, file, database_user, client_address,
+                 client_user, status, action)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (hostname, sid, timestamp, fname, db_user, addr, cuser, status, action))
+            inserted += 1
+        except sqlite3.IntegrityError:
+            pass  # duplicate → ignored
+
+    conn.commit()
+    conn.close()
+    return {"stored": inserted}
 
 @app.get("/latest_failures")
 def latest_failures():
@@ -164,3 +204,18 @@ def dashboard(request: Request):
     return templates.TemplateResponse(
         "dashboard.html", {"request": request, "rows": rows}
     )
+
+@app.get("/dashboard/sys-audit")
+def dashboard_sys_audit(request: Request):
+    conn = sqlite3.connect(DB)
+    cur = conn.cursor()
+    cur.execute("""
+        SELECT hostname, sid, timestamp, client_address, client_user, status, action
+        FROM db_sys_audit
+        ORDER BY timestamp DESC
+        LIMIT 500
+    """)
+    rows = cur.fetchall()
+    conn.close()
+    return templates.TemplateResponse("sysdash.html",
+                                      {"request": request, "rows": rows})
