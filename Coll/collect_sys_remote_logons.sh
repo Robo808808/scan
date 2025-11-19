@@ -78,7 +78,7 @@ EOF
     parse_aud "$SID" "$FILE" >> "$TMP"
     count=$((count+1))
     [[ $count -ge $MAX_FILES ]] && break
-  done < <(find "$AUD" -type f -name "*.aud" -printf "%T@ %p\n" | sort -nr | awk '{print $2}')
+  done < <(find "$AUD" -type f \( -name "*.aud" -o -name "ora_*" -o -name "*.log" \))
 done
 
 echo "CSV built → $TMP"
