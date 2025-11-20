@@ -111,3 +111,27 @@ SQL
   return 0
 }
 
+
+
+
+WITH aud_enabled AS (
+  SELECT 'Y' AS enabled
+  FROM   audit_unified_enabled_policies
+  WHERE  UPPER(user_name) = 'SYSTEM'
+  UNION ALL
+  SELECT 'Y'
+  FROM   dba_stmt_audit_opts
+  WHERE  username = 'SYSTEM'
+), logins AS (
+  SELECT COUNT(*) AS cnt
+  FROM   unified_audit_trail
+  WHERE  dbusername = 'SYSTEM'
+  UNION ALL
+  SELECT COUNT(*)
+  FROM   sys.aud$
+  WHERE  userid = 'SYSTEM'
+)
+SELECT
+  COALESCE((SELECT enabled FROM aud_enabled FETCH FIRST 1 ROWS ONLY),'N') AS system_auditing_enabled,
+  (SELECT SUM(cnt) FROM logins) AS system_login_events
+FROM dual;
