@@ -1,0 +1,42 @@
+@startuml
+title Centralised Oracle audit info Collection & Dashboard
+
+actor "BladeLogic Job\n(or Cron Scheduler)" as bl
+node "Target DB Server(s)" as server {
+  component "Bash Collection Script" as bash
+  database "Oracle Database\n(password file, audit, dba_db_links,\n audit policies etc.)" as oracle
+}
+
+node "Central Server" as central {
+  component "FastAPI Application" as fastapi
+  database "SQLite\n(central repository)" as sqlite
+  component "HTML Dashboard\n(Jinja2 Templates)" as dashboard
+}
+
+bl --> bash : executes script\n(on multiple hosts)
+bash --> oracle : sqlplus queries\nOS CSV extraction
+note right of bash
+  Collects:
+  • PDB / SID metadata
+  • Password file presence
+  • SYS/SYSTEM DB links
+  • SYSTEM audit policies
+  • SYS audit CSV (optional)
+end note
+
+bash --> fastapi : POST JSON payload\n(one per host)
+fastapi --> sqlite : UPSERT per check\n(change tracked in history)
+
+dashboard --> sqlite : read-only queries
+dashboard <- fastapi : renders HTML view
+
+note right of fastapi
+  API endpoints:
+  • /submit (ingest results)
+  • /latest_failures
+  • /changes
+  • /stats
+  • /dashboard (HTML UI)
+end note
+
+@enduml

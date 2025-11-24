@@ -1,0 +1,27 @@
+@startuml
+title Data Flow – Oracle Audit Info Collection
+
+participant BladeLogic as BL
+participant "Bash Script" as BSH
+participant "Oracle DB\n(OS + Data Dictionary)" as ORA
+participant "FastAPI" as API
+database "SQLite" as DB
+
+BL -> BSH : Execute script (BladeLogic or cron)
+BSH -> ORA : Run sqlplus checks\nand read CSV audit files
+ORA --> BSH : Results
+BSH -> BSH : Build JSON payload via jq
+
+BSH -> API : POST JSON results (/submit)
+API -> DB : UPSERT results\n(log history if changed)
+API --> BSH : HTTP 200 OK
+
+note over API
+User later views dashboard
+end note
+
+User -> API : GET /dashboard
+API -> DB : fetch result rows
+DB --> API : latest aggregated state
+API --> User : HTML dashboard
+@enduml
