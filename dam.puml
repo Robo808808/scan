@@ -1,0 +1,128 @@
+@startuml
+title Imperva SecureSphere + DRA / Sonar Hub - Two DCs (one & two)
+
+skinparam rectangle {
+  BackgroundColor<<DC>> #EEEEEE
+  BorderColor<<DC>> #777777
+  RoundCorner 20
+}
+skinparam package {
+  BackgroundColor #F9F9F9
+  BorderColor #999999
+  RoundCorner 15
+}
+skinparam node {
+  BackgroundColor #FFFFFF
+  BorderColor #555555
+}
+skinparam database {
+  BackgroundColor #FFFFFF
+  BorderColor #555555
+}
+
+' ============================================================
+' Datacentre one
+' ============================================================
+rectangle "Datacentre one" as DC1 <<DC>> {
+
+  ' Databases in DC1
+  package "Databases (DC1)\nOracle / MS SQL / PostgreSQL\n[Agents installed]" as DB1 {
+    database "Oracle\n(DB + Agent)" as ORA1
+    database "MS SQL\n(DB + Agent)" as MSSQL1
+    database "PostgreSQL\n(DB + Agent)" as PG1
+  }
+
+  ' Gateway Cluster in DC1
+  package "Gateway Cluster (DC1)\nGW1, GW2, GW3" as GWCL1 {
+    node "GW1" as GW1
+    node "GW2" as GW2
+    node "GW3" as GW3
+  }
+
+  ' MX in DC1
+  package "SecureSphere MX (DC1)" as MXPK1 {
+    node "MX (Primary)\nSecureSphere Manager" as MX1
+  }
+
+  ' Analytics in DC1
+  package "Analytics / Reporting (Primary)" as ANA1 {
+    node "SOM\n(Security Operations Monitor)" as SOM
+    node "DRA Analytics" as DRAA
+    node "DRA Admin" as DRAADM
+    node "Sonar Hub" as SONAR
+  }
+}
+
+' ============================================================
+' Datacentre two
+' ============================================================
+rectangle "Datacentre two" as DC2 <<DC>> {
+
+  ' Databases in DC2
+  package "Databases (DC2)\nOracle / MS SQL / PostgreSQL\n[Agents installed]" as DB2 {
+    database "Oracle\n(DB + Agent)" as ORA2
+    database "MS SQL\n(DB + Agent)" as MSSQL2
+    database "PostgreSQL\n(DB + Agent)" as PG2
+  }
+
+  ' Gateway Cluster in DC2
+  package "Gateway Cluster (DC2)\nGW4, GW5, GW6" as GWCL2 {
+    node "GW4" as GW4
+    node "GW5" as GW5
+    node "GW6" as GW6
+  }
+
+  ' MX in DC2
+  package "SecureSphere MX (DC2)" as MXPK2 {
+    node "MX (Secondary / DR)\nSecureSphere Manager" as MX2
+  }
+
+  ' DR placeholder block to help keep sizes similar
+  package "DR / Reserved Analytics (DC2)" as DRANA {
+    node "Future DR\nAnalytics / Sonar" as FUTURE
+  }
+}
+
+' ============================================================
+' High-level data flows (simplified, per DC)
+' ============================================================
+
+' DC1 flow: Agents -> Gateway cluster -> MX -> Analytics
+DB1 --> GWCL1 : Local DB traffic & audit\n(agents → local gateways, DC1)
+GWCL1 --> MX1 : Events & audit\n(consolidated from DC1 gateways)
+MX1 --> DRAA  : Detailed audit streams
+MX1 --> SOM   : Incidents & security events
+DRAA --> SONAR
+SONAR --> DRAADM : Dashboards & reports
+
+' DC2 flow: Agents -> Gateway cluster -> MX -> Analytics (in DC1)
+DB2 --> GWCL2 : Local DB traffic & audit\n(agents → local gateways, DC2)
+GWCL2 --> MX2 : Events & audit\n(consolidated from DC2 gateways)
+
+' Both MXs feed the same analytics stack in DC1
+MX2 --> DRAA : Detailed audit streams\n(from DC2)
+
+' MX sync between DCs
+MX1 <--> MX2 : Policy & config sync
+
+' ============================================================
+' High-level legend
+' ============================================================
+legend top
+  == High-level Data Flow (per DC) ==
+  1. Agents on Oracle / MS SQL / PostgreSQL
+     send local DB traffic / audit
+     → Gateway Cluster in same DC
+
+  2. Gateway Cluster applies policies
+     and forwards events / audit
+     → Local MX (SecureSphere Manager)
+
+  3. MX correlates and forwards audit streams
+     → DRA Analytics / Sonar Hub (in DC1)
+
+  4. Sonar Hub + DRA Admin provide
+     analytics, dashboards and reports.
+endlegend
+
+@enduml
