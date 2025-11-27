@@ -3,31 +3,32 @@
 API_URL="https://central.server.example.com/collect/oracle/endpoints"
 HOST=$(hostname -s)
 LOG="/tmp/oracle_endpoint_post.log"
-DEBUG=1   # set to 0 later after troubleshooting
+DEBUG=1   # set to 0 later to quiet it down
 
-function debug() {
-  [[ "$DEBUG" -eq 1 ]] && echo "[DEBUG] $1"
+log_debug() {
+  if [[ "$DEBUG" -eq 1 ]]; then
+    echo "[DEBUG] $1"
+  fi
 }
 
+echo "===== START DEBUG RUN on host $HOST ====="
+
+# Check jq up front
 if ! command -v jq >/dev/null 2>&1; then
-  echo "ERROR: jq not installed" >&2
+  echo "ERROR: jq not installed in PATH" >&2
   exit 1
 fi
 
-declare -A ENDPOINTS
-declare -A LISTENER_PORTS    # listener_pid => "1521 1522"
-declare -A DB_PORTS_MAP      # DB => "1521 1522"
-
-echo ""
-echo "===== START DEBUG RUN on host $HOST ====="
+declare -A ENDPOINTS         # "host:port/service" -> 1
+declare -A LISTENER_PORTS    # listener_pid -> "1521 1522"
 
 ###########################################
-# STEP 1 — Identify listeners + ports via ss/netstat
+# STEP 1: Discover listeners + their ports
 ###########################################
-debug "Discovering running listener processes and ports..."
+log_debug "Discovering listener processes (tnslsnr) and ports..."
 
 while read -r PID CMD; do
-  debug "Found listener PID $PID ($CMD)"
+  log_debug "  Listener candidate PID=$PID CMD=$CMD"
 
   if command -v ss >/dev/null 2>&1; then
     PORTS=$(ss -ltnp 2>/dev/null | awk -v pid="$PID" '
@@ -46,17 +47,21 @@ while read -r PID CMD; do
   fi
 
   if [[ -n "$PORTS" ]]; then
-    debug " → Listener PID $PID is listening on ports: $PORTS"
-    LISTENER_PORTS["$PID"]=$(echo "$PORTS" | sort -u)
+    PORTS_SORTED=$(echo "$PORTS" | sort -u | xargs)
+    log_debug "    -> Listener PID=$PID ports: $PORTS_SORTED"
+    LISTENER_PORTS["$PID"]="$PORTS_SORTED"
   else
-    debug " → Listener PID $PID has NO TCP listening ports??"
+    log_debug "    -> Listener PID=$PID has NO listening TCP ports (unexpected)"
   fi
+
 done < <(ps -eo pid,args | awk '/tnslsnr/ && !/awk/ && !/grep/ {print $1, $0}')
 
-echo ""
+if [[ ${#LISTENER_PORTS[@]} -eq 0 ]]; then
+  log_debug "No tnslsnr processes found on this host."
+fi
 
 ###########################################
-# STEP 2 — Loop DBs, detect PMON → Listener FD → ports
+# STEP 2: Loop DBs in /etc/oratab, PMON -> listener FD -> ports
 ###########################################
 while IFS=':' read -r DB ORACLE_HOME Y; do
   [[ "$DB" =~ ^# || -z "$DB" ]] && continue
@@ -64,44 +69,58 @@ while IFS=':' read -r DB ORACLE_HOME Y; do
   echo ""
   echo "----- Processing DB: $DB -----"
 
-  PMON_PID=$(pgrep -f "pmon_${DB}")
+  # find PMON
+  PMON_PID=$(pgrep -f "pmon_${DB}" || true)
   if [[ -z "$PMON_PID" ]]; then
-    debug "DB $DB is NOT running (no PMON)."
+    log_debug "  DB $DB: no PMON found (DB down?) - skipping"
     continue
   fi
-  debug "PMON PID for $DB is: $PMON_PID"
+  log_debug "  DB $DB: PMON PID=$PMON_PID"
 
+  # ensure /proc entry exists
+  if [[ ! -d "/proc/$PMON_PID/fd" ]]; then
+    log_debug "  DB $DB: /proc/$PMON_PID/fd does not exist - skipping"
+    continue
+  fi
+
+  # figure out which listener PIDs this PMON references
   DB_PORTS=()
 
-  # check whether PMON FD table shows connections to listener PIDs
   for L_PID in "${!LISTENER_PORTS[@]}"; do
-    debug "Checking whether PMON $PMON_PID has FD connected to listener $L_PID..."
+    log_debug "    Checking FDs of PMON $PMON_PID for listener PID $L_PID"
 
-    if ls -l /proc/"$PMON_PID"/fd 2>/dev/null | grep -q "$L_PID"; then
-      debug " → PMON has FD referencing listener $L_PID (GOOD)"
+    # show a small sample of fd lines to understand what's in there (first 5)
+    if [[ "$DEBUG" -eq 1 ]]; then
+      log_debug "      Sample of /proc/$PMON_PID/fd (first 5 lines):"
+      ls -l "/proc/$PMON_PID/fd" 2>/dev/null | head -n 5 | sed 's/^/        /'
+    fi
+
+    # This is the controversial step: grep for L_PID in the FD listing
+    if ls -l "/proc/$PMON_PID/fd" 2>/dev/null | grep -q "$L_PID"; then
+      log_debug "      -> MATCH: PMON $PMON_PID appears to reference listener PID $L_PID"
       for port in ${LISTENER_PORTS[$L_PID]}; do
-        debug "   → Adding port $port for DB $DB"
+        log_debug "         -> associating port $port with DB $DB (via listener PID $L_PID)"
         DB_PORTS+=("$port")
       done
     else
-      debug " → PMON does NOT reference listener $L_PID (ignore)"
+      log_debug "      -> NO MATCH: PMON $PMON_PID does not reference listener PID $L_PID"
     fi
   done
 
   if [[ ${#DB_PORTS[@]} -eq 0 ]]; then
-    debug "!!! DB $DB has NO matched listener ports by FD. It will NOT contribute endpoints."
+    log_debug "  DB $DB: NO ports associated via FD mapping. This DB will NOT contribute endpoints."
     continue
+  else
+    log_debug "  DB $DB: collected ports: ${DB_PORTS[*]}"
   fi
 
-  DB_PORTS_MAP["$DB"]="${DB_PORTS[*]}"
-
   ###########################################
-  # Get CDB root services (filtered)
+  # STEP 2b: get root 'public' services
   ###########################################
-  debug "Querying root service names for $DB..."
+  log_debug "  DB $DB: querying filtered root services (v\$services)..."
 
-  SQL_SVC=$(sqlplus -s / as sysdba <<'EOF'
-set pages 0 feedback off heading off verify off echo off
+  SQL_SVC_OUT=$(sqlplus -s / as sysdba <<'EOF'
+set pages 0 feedback off heading off verify off echo off termout on
 SELECT name
 FROM v$services
 WHERE network_name IS NOT NULL
@@ -114,51 +133,95 @@ WHERE network_name IS NOT NULL
 ORDER BY name;
 EOF
 )
-  SERVICES=$(printf "%s\n" "$SQL_SVC" | sed '/^$/d')
+  SQL_STATUS=$?
 
-  debug " → Services returned for $DB: ${SERVICES:-NONE}"
-
-  if [[ -z "$SERVICES" ]]; then
-    debug "!!! DB $DB found ZERO valid root services — skip"
+  if [[ $SQL_STATUS -ne 0 ]]; then
+    log_debug "  DB $DB: sqlplus exited with status $SQL_STATUS"
+    log_debug "  DB $DB: raw SQL output was:"
+    echo "$SQL_SVC_OUT" | sed 's/^/    [SQL]/'
     continue
   fi
 
+  # NOTE: if there are ORA-/SP2- errors they’ll also appear here
+  if echo "$SQL_SVC_OUT" | grep -qE 'ORA-|SP2-'; then
+    log_debug "  DB $DB: v\$services query returned ORA-/SP2- errors, skipping this DB"
+    echo "$SQL_SVC_OUT" | sed 's/^/    [SQLERR]/'
+    continue
+  fi
+
+  SERVICES=$(printf "%s\n" "$SQL_SVC_OUT" | sed '/^$/d')
+
+  if [[ -z "$SERVICES" ]]; then
+    log_debug "  DB $DB: v\$services query returned NO services after filtering."
+    continue
+  else
+    log_debug "  DB $DB: services to publish:"
+    printf "%s\n" "$SERVICES" | sed 's/^/    svc: /'
+  fi
+
   ###########################################
-  # record endpoints to global ENDPOINTS
+  # STEP 2c: add endpoints for this DB
   ###########################################
-  for port in ${DB_PORTS[*]}; do
+  for port in "${DB_PORTS[@]}"; do
     for svc in $SERVICES; do
       ep="${HOST}:${port}/${svc}"
-      debug "Adding endpoint: $ep"
+      log_debug "  DB $DB: adding endpoint $ep"
       ENDPOINTS["$ep"]=1
     done
   done
 
 done < /etc/oratab
 
+###########################################
+# STEP 3: show summary BEFORE building JSON
+###########################################
 echo ""
 echo "===== SUMMARY BEFORE JSON ====="
-for k in "${!ENDPOINTS[@]}"; do
-  echo "  ENDPOINT: $k"
-done
+if [[ ${#ENDPOINTS[@]} -eq 0 ]]; then
+  echo "  (no endpoints discovered)"
+else
+  for ep in "${!ENDPOINTS[@]}"; do
+    echo "  ENDPOINT: $ep"
+  done
+fi
 echo "================================"
 echo ""
 
 ###########################################
-# STEP 3 — Build JSON
+# STEP 4: Build JSON payload safely
 ###########################################
-PAYLOAD="[]"
+PAYLOAD='[]'   # start as valid JSON array
+
 for ep in "${!ENDPOINTS[@]}"; do
-  PAYLOAD=$(printf '%s\n' "$PAYLOAD" | jq -c --arg ep "$ep" '. += [$ep]')
+  # if jq fails, log and bail out (prevents payload becoming garbage)
+  NEW_PAYLOAD=$(printf '%s\n' "$PAYLOAD" | jq -c --arg ep "$ep" '. += [$ep]' 2>/tmp/jq_error.$$.log || echo "")
+  if [[ -z "$NEW_PAYLOAD" ]]; then
+    echo "ERROR: jq failed while adding endpoint '$ep'" >&2
+    echo "jq stderr:" >&2
+    sed 's/^/  /' /tmp/jq_error.$$.log >&2
+    rm -f /tmp/jq_error.$$.log
+    exit 1
+  fi
+  rm -f /tmp/jq_error.$$.log
+  PAYLOAD="$NEW_PAYLOAD"
 done
 
+log_debug "Final PAYLOAD JSON array: $PAYLOAD"
+
+# Wrap in outer object { "host": [ ... ] }
 FINAL_JSON=$(jq -n --arg host "$HOST" --argjson data "$PAYLOAD" '{($host): $data}')
+log_debug "FINAL_JSON to POST:"
+log_debug "$FINAL_JSON"
 
-echo "JSON that will be POSTed:"
-echo "$FINAL_JSON"
-echo ""
+###########################################
+# STEP 5: POST
+###########################################
+RESP=$(curl -s -o /tmp/endpoint_resp.json -w "%{http_code}" \
+  -X POST "$API_URL" \
+  -H "Content-Type: application/json" \
+  -d "$FINAL_JSON")
 
-curl -s -X POST -H "Content-Type: application/json" -d "$FINAL_JSON" "$API_URL" >/dev/null 2>&1
+echo "HTTP response code from API: $RESP"
+echo "JSON sent:"
 echo "$FINAL_JSON"
-echo ""
-echo "===== END DEBUG ====="
+echo "===== END DEBUG RUN ====="
