@@ -17,45 +17,41 @@ fi
 declare -A DB_ENDPOINTS  # map of "host:port/service" unique
 
 #############################################
-# STEP 1 — Identify running listeners + map to ports + DBs
+# STEP 1 — Identify listeners with ports AND their DB instances
 #############################################
 
-# listener → ports    (LISTENER_PORTS["LISTENER1"]="1521 1523")
 declare -A LISTENER_PORTS
-# listener → DB names (LISTENER_DBS["LISTENER1"]="db1 db2")
-declare -A LISTENER_DBS
+declare -A LISTENER_INSTANCES   # LISTENER_INSTANCES["LISTENER1"]="db1 db2"
 
-# Extract listener names from running processes
 while read -r PID CMDLINE; do
-  # Listener name is 2nd token on the tnlsnr command line
   LNAME=$(echo "$CMDLINE" | awk '{print $2}')
   [[ -z "$LNAME" ]] && continue
 
-  # Get the ports this listener PID is listening on
+  # Find ports
   if command -v ss >/dev/null 2>&1; then
     PORTS=$(ss -ltnp 2>/dev/null | awk -v pid="$PID" '
       $0 ~ "pid=" pid "," {
-        split($4,a,":");
-        port=a[length(a)];
+        split($4,a,":"); port=a[length(a)];
         if (port ~ /^[0-9]+$/) print port;
       }')
   else
     PORTS=$(netstat -ltnp 2>/dev/null | awk -v pid="$PID" '
       $0 ~ "LISTEN" && $0 ~ pid"/" {
-        split($4,a,":");
-        port=a[length(a)];
+        split($4,a,":"); port=a[length(a)];
         if (port ~ /^[0-9]+$/) print port;
       }')
   fi
+  [[ -n "$PORTS" ]] && LISTENER_PORTS["$LNAME"]=$(echo "$PORTS" | sort -u)
 
-  if [[ -n "$PORTS" ]]; then
-    LISTENER_PORTS["$LNAME"]=$(echo "$PORTS" | sort -u)
-  fi
-
-  # Find which DBs register with this listener
-  OUT=$(lsnrctl status "$LNAME" 2>/dev/null)
-  DBS=$(echo "$OUT" | awk '/Service ".*" has 1/ {print $2}' | sed 's/"//g')
-  [[ -n "$DBS" ]] && LISTENER_DBS["$LNAME"]=$(echo "$DBS" | sort -u)
+  # Parse DB instances registered with this listener
+  STATUS=$(lsnrctl status "$LNAME" 2>/dev/null)
+  INSTS=$(echo "$STATUS" | awk '
+    /Instance "/ {
+      gsub(/"/,"",$2);
+      inst=$2
+      print inst
+    }')
+  [[ -n "$INSTS" ]] && LISTENER_INSTANCES["$LNAME"]=$(echo "$INSTS" | sort -u)
 
 done < <(ps -eo pid,args | awk '/tnslsnr/ && !/awk/ && !/grep/ {pid=$1; $1=""; print pid, $0}')
 
@@ -78,9 +74,9 @@ while IFS=':' read -r DB ORACLE_HOME Y; do
 
   # Determine which listener(s) serve this DB
   DB_LISTENER_PORTS=()
-  for L in "${!LISTENER_DBS[@]}"; do
-    for d in ${LISTENER_DBS[$L]}; do
-      [[ "$d" == "$DB" ]] || continue
+  for L in "${!LISTENER_INSTANCES[@]}"; do
+    for inst in ${LISTENER_INSTANCES[$L]}; do
+      [[ "$inst" == "$DB" ]] || continue
       for port in ${LISTENER_PORTS[$L]}; do
         DB_LISTENER_PORTS+=("$port")
       done
