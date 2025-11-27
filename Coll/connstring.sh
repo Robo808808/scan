@@ -1,7 +1,7 @@
 #!/bin/bash
 #
-# Discover Oracle root-container (or non-CDB) services and POST them
-# as hostname:port/service to a central FastAPI collector.
+# Discover Oracle "public" CDB root services per database and POST
+# them to a FastAPI collector in JSON form: { "hostname": [ "host:port/service" ] }
 #
 
 API_URL="https://central.server.example.com/collect/oracle/endpoints"
@@ -14,120 +14,127 @@ if ! command -v jq >/dev/null 2>&1; then
   exit 1
 fi
 
+declare -A DB_ENDPOINTS  # map of "host:port/service" unique
+
 #############################################
-# 1. Discover ports used by running TNSLSNR
+# STEP 1 — Identify running listeners + map to ports + DBs
 #############################################
 
-declare -A PORTS_MAP   # unique list of ports: PORTS_MAP[1521]=1 etc.
+# listener → ports    (LISTENER_PORTS["LISTENER1"]="1521 1523")
+declare -A LISTENER_PORTS
+# listener → DB names (LISTENER_DBS["LISTENER1"]="db1 db2")
+declare -A LISTENER_DBS
 
-# Get all tnslsnr PIDs
+# Extract listener names from running processes
 while read -r PID CMDLINE; do
-  # Find listening TCP ports for this PID using ss or netstat
+  # Listener name is 2nd token on the tnlsnr command line
+  LNAME=$(echo "$CMDLINE" | awk '{print $2}')
+  [[ -z "$LNAME" ]] && continue
+
+  # Get the ports this listener PID is listening on
   if command -v ss >/dev/null 2>&1; then
     PORTS=$(ss -ltnp 2>/dev/null | awk -v pid="$PID" '
       $0 ~ "pid=" pid "," {
-        # local address:port is col 4
-        split($4, a, ":");
+        split($4,a,":");
         port=a[length(a)];
         if (port ~ /^[0-9]+$/) print port;
-      }' | sort -u)
+      }')
   else
-    # Fallback to netstat
     PORTS=$(netstat -ltnp 2>/dev/null | awk -v pid="$PID" '
       $0 ~ "LISTEN" && $0 ~ pid"/" {
-        split($4, a, ":");
+        split($4,a,":");
         port=a[length(a)];
         if (port ~ /^[0-9]+$/) print port;
-      }' | sort -u)
+      }')
   fi
 
-  for p in $PORTS; do
-    PORTS_MAP["$p"]=1
-  done
+  if [[ -n "$PORTS" ]]; then
+    LISTENER_PORTS["$LNAME"]=$(echo "$PORTS" | sort -u)
+  fi
 
-done < <(ps -eo pid,args | awk '/tnslsnr/ && !/awk/ && !/grep/ {pid=$1; $1=""; sub(/^ /,"",$0); print pid, $0}')
+  # Find which DBs register with this listener
+  OUT=$(lsnrctl status "$LNAME" 2>/dev/null)
+  DBS=$(echo "$OUT" | awk '/Service ".*" has 1/ {print $2}' | sed 's/"//g')
+  [[ -n "$DBS" ]] && LISTENER_DBS["$LNAME"]=$(echo "$DBS" | sort -u)
 
-if [[ ${#PORTS_MAP[@]} -eq 0 ]]; then
-  echo "$(date) No listener ports discovered on $HOST" >> "$LOG"
-fi
+done < <(ps -eo pid,args | awk '/tnslsnr/ && !/awk/ && !/grep/ {pid=$1; $1=""; print pid, $0}')
 
 #############################################
-# 2. Loop DBs in /etc/oratab and collect services
+# STEP 2 — Loop /etc/oratab & link DB to its listener ports
 #############################################
-
-declare -A EP_MAP   # unique endpoints: EP_MAP["host:port/service"]=1
 
 while IFS=':' read -r DB ORACLE_HOME Y; do
-  # Skip comments/blank
   [[ "$DB" =~ ^# || -z "$DB" ]] && continue
 
-  # Only consider DB entries (not ASM, etc.) – optional filter
-  # [[ "$DB" == *"+"* ]] && continue
+  # Check PMON running → DB is up
+  if ! ps -ef | grep -q "[p]mon_${DB}"; then
+    echo "$(date) DB $DB not running — skipping" >> "$LOG"
+    continue
+  fi
 
   export ORACLE_HOME
   export ORACLE_SID="$DB"
   export PATH="$ORACLE_HOME/bin:$PATH"
 
-  # Check DB is running via PMON
-  if ! ps -ef | grep -q "[p]mon_${DB}"; then
-    echo "$(date) Skipping $DB (PMON not running)" >> "$LOG"
-    continue
+  # Determine which listener(s) serve this DB
+  DB_LISTENER_PORTS=()
+  for L in "${!LISTENER_DBS[@]}"; do
+    for d in ${LISTENER_DBS[$L]}; do
+      [[ "$d" == "$DB" ]] || continue
+      for port in ${LISTENER_PORTS[$L]}; do
+        DB_LISTENER_PORTS+=("$port")
+      done
+    done
+  done
+
+  # If no listener claims the DB → fallback = all listener ports?
+  if [[ ${#DB_LISTENER_PORTS[@]} -eq 0 ]]; then
+    for L in "${!LISTENER_PORTS[@]}"; do
+      for port in ${LISTENER_PORTS[$L]}; do
+        DB_LISTENER_PORTS+=("$port")
+      done
+    done
   fi
 
-  # Run SQL to get root-only services; fallback for non-CDB
+  # Get filtered root-container services (all of them, not just one)
   SQL_OUT=$(sqlplus -s / as sysdba <<'EOF'
 set pages 0 feedback off heading off verify off echo off
-WITH svc AS (
-  SELECT name, con_id
-  FROM v$services
-  WHERE network_name IS NOT NULL
-),
-root_svc AS (
-  SELECT name FROM svc WHERE con_id = 0
-),
-fallback AS (
-  SELECT name FROM svc
-)
-SELECT name FROM root_svc
-UNION
-SELECT name FROM fallback WHERE NOT EXISTS (SELECT 1 FROM root_svc);
+SELECT name
+FROM v$services
+WHERE network_name IS NOT NULL
+  AND con_id = 0
+  AND name NOT LIKE '%XDB%'
+  AND name NOT LIKE '%_DGMGRL%'
+  AND name NOT LIKE '%_CFG'
+  AND name NOT LIKE 'SYS$%'
+  AND name NOT LIKE 'PDB$SEED%'
+ORDER BY name;
 EOF
-)
+  )
 
-  # Normalise / strip empty
-  ROOT_SERVICES=$(printf "%s\n" "$SQL_OUT" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//' | sed '/^$/d')
+  SERVICES=$(printf "%s\n" "$SQL_OUT" | sed '/^$/d')
+  [[ -z "$SERVICES" ]] && continue
 
-  if [[ -z "$ROOT_SERVICES" ]]; then
-    echo "$(date) No services returned for $DB on $HOST" >> "$LOG"
-    continue
-  fi
-
-  # For this DB, combine each discovered port with each root service
-  for port in "${!PORTS_MAP[@]}"; do
-    for svc in $ROOT_SERVICES; do
+  # Combine DB-matching listener ports + all (filtered) services
+  for port in "${DB_LISTENER_PORTS[@]}"; do
+    for svc in $SERVICES; do
       ep="${HOST}:${port}/${svc}"
-      EP_MAP["$ep"]=1
+      DB_ENDPOINTS["$ep"]=1
     done
   done
 
 done < /etc/oratab
 
 #############################################
-# 3. Build JSON payload (per host)
+# STEP 3 — Build JSON + POST
 #############################################
 
 PAYLOAD="[]"
-
-for ep in "${!EP_MAP[@]}"; do
+for ep in "${!DB_ENDPOINTS[@]}"; do
   PAYLOAD=$(printf '%s\n' "$PAYLOAD" | jq -c --arg ep "$ep" '. += [$ep]')
 done
 
-# If nothing found, still send empty list for the host
 FINAL_JSON=$(jq -n --arg host "$HOST" --argjson data "$PAYLOAD" '{($host): $data}')
-
-#############################################
-# 4. POST to FastAPI
-#############################################
 
 RESP=$(curl -s -o /tmp/endpoint_resp.json -w "%{http_code}" \
   -X POST "$API_URL" \
@@ -135,9 +142,9 @@ RESP=$(curl -s -o /tmp/endpoint_resp.json -w "%{http_code}" \
   -d "$FINAL_JSON")
 
 if [[ "$RESP" == "200" || "$RESP" == "201" ]]; then
-  echo "$(date) OK posted endpoints for $HOST ($RESP)" >> "$LOG"
+  echo "$(date) OK posted for $HOST ($RESP)" >> "$LOG"
 else
-  echo "$(date) ERROR posting endpoints for $HOST code=$RESP payload=$FINAL_JSON" >> "$LOG"
+  echo "$(date) ERROR posting for $HOST code=$RESP payload=$FINAL_JSON" >> "$LOG"
 fi
 
 echo "$FINAL_JSON"
