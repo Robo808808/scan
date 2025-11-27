@@ -25,27 +25,28 @@ while IFS=':' read -r DB ORACLE_HOME Y; do
   export PATH="$ORACLE_HOME/bin:$PATH"
 
   #################################################################
-  # 1) Read LOCAL_LISTENER
+  # 1) LOCAL_LISTENER
   #################################################################
   LL=$(sqlplus -s / as sysdba <<EOF
 set pages 0 feedback off heading off echo off
-select value from v\\$parameter where name='local_listener';
+select value from v\$parameter where name='local_listener';
 EOF
   )
-  LL=$(echo "$LL" | xargs)
-  log "LOCAL_LISTENER = '$LL'"
+  LL=$(echo "$LL" | xargs) # trim whitespace
+  log "LOCAL_LISTENER raw = '$LL'"
 
+  # CASE C — if LOCAL_LISTENER is NULL
   if [[ -z "$LL" ]]; then
-    log "No LOCAL_LISTENER — skipping"
-    continue
+    LNAME="LISTENER"    # Oracle default
+    log "LOCAL_LISTENER is NULL — assuming default listener name '$LNAME'"
   fi
 
   #################################################################
-  # 2) Extract services
+  # 2) Services (unfiltered)
   #################################################################
   SVC_RAW=$(sqlplus -s / as sysdba <<EOF
 set pages 0 feedback off heading off echo off
-select name from v\\$services order by name;
+select name from v\$services order by name;
 EOF
   )
   SERVICES=$(echo "$SVC_RAW" | sed '/^$/d')
@@ -54,38 +55,61 @@ EOF
     continue
   fi
 
+  log "Services:"
+  while read -r svc; do log "  - $svc"; done <<< "$SERVICES"
+
   #################################################################
-  # 3) Determine PORT from LOCAL_LISTENER
+  # 3) Determine PORT
   #################################################################
   PORT=""
+  LSN_PID=""
 
-  ## Case A: LOCAL_LISTENER includes explicit PORT=
-  if [[ "$LL" =~ PORT=([0-9]+) ]]; then
-    PORT="${BASH_REMATCH[1]}"
-    log "Extracted port directly from LOCAL_LISTENER → $PORT"
+  if [[ -n "$LL" ]]; then
 
-  ## Case B: LOCAL_LISTENER is a TNS alias e.g. LISTENER_DB1
-  else
-    LNAME="$LL"
-    log "LOCAL_LISTENER appears to be listener alias → $LNAME"
+    ###############################################################
+    # Case A1 — TNS connect descriptor with PORT=
+    ###############################################################
+    if [[ "$LL" =~ PORT=([0-9]+) ]]; then
+      PORT="${BASH_REMATCH[1]}"
+      log "LOCAL_LISTENER contains TNS descriptor — extracted PORT $PORT"
 
-    # Find listener PID based on command line matching the alias
-    LPID=$(ps -eo pid,args | awk -v ln="$LNAME" '/tnslsnr/ && $0 ~ ln {print $1}' | head -n 1)
+    ###############################################################
+    # Case A2 — hostname:port format
+    ###############################################################
+    elif [[ "$LL" =~ :([0-9]+)$ ]]; then
+      PORT="${BASH_REMATCH[1]}"
+      log "LOCAL_LISTENER is host:port — extracted PORT $PORT"
 
-    if [[ -z "$LPID" ]]; then
-      log "Listener alias '$LNAME' not found in running processes — skipping DB"
+    ###############################################################
+    # Case B — listener alias (tnsnames style)
+    ###############################################################
+    else
+      LNAME="$LL"
+      log "LOCAL_LISTENER appears to be alias '$LNAME'"
+    fi
+  fi
+
+  #################################################################
+  # If port is still empty → listener alias lookup
+  #################################################################
+  if [[ -z "$PORT" ]]; then
+    log "Attempting PID discovery for listener alias '$LNAME'"
+
+    LSN_PID=$(ps -ef | grep -i tnslsnr | grep -i "$LNAME" | grep -v grep | awk '{print $2}' | head -n 1)
+    log "Listener alias '$LNAME' → PID = $LSN_PID"
+
+    if [[ -z "$LSN_PID" ]]; then
+      log "Listener alias '$LNAME' not found — skipping DB"
       continue
     fi
-    log "Listener alias '$LNAME' corresponds to PID $LPID"
 
-    # Derive port from listener PID via ss/netstat
     if command -v ss >/dev/null 2>&1; then
-      PORT=$(ss -ltnp | awk -v pid="$LPID" '$0 ~ "pid=" pid "," {split($4,a,":"); print a[length(a)]}' | head -n 1)
+      PORT=$(ss -ltnp | awk -v pid="$LSN_PID" '$0 ~ "pid=" pid "," {split($4,a,":"); print a[length(a)]}' | head -n 1)
     else
-      PORT=$(netstat -ltnp | awk -v pid="$LPID" '$0 ~ pid"/" {split($4,a,":"); print a[length(a)]}' | head -n 1)
+      PORT=$(netstat -ltnp | awk -v pid="$LSN_PID" '$0 ~ pid"/" {split($4,a,":"); print a[length(a)]}' | head -n 1)
     fi
 
-    log "Listener PID $LPID → PORT $PORT"
+    log "Listener PID $LSN_PID → PORT $PORT"
   fi
 
   if [[ -z "$PORT" ]]; then
@@ -104,9 +128,8 @@ EOF
 
 done < /etc/oratab
 
-
 #################################################################
-# 5) Build JSON payload
+# 5) Build JSON
 #################################################################
 PAYLOAD="[]"
 for ep in "${!ENDPOINTS[@]}"; do
@@ -118,3 +141,4 @@ FINAL_JSON=$(jq -n --arg host "$HOST" --argjson data "$PAYLOAD" '{($host): $data
 echo ""
 echo "===== FINAL JSON ====="
 echo "$FINAL_JSON"
+echo "===== END RUN ====="
