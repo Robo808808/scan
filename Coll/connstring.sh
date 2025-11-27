@@ -1,6 +1,5 @@
 #!/bin/bash
 
-API_URL="https://central.server.example.com/collect/oracle/endpoints"
 HOST=$(hostname -s)
 DEBUG=1
 log() { [[ $DEBUG -eq 1 ]] && echo "[DEBUG] $1"; }
@@ -13,11 +12,11 @@ while IFS=':' read -r DB ORACLE_HOME Y; do
   [[ -z "$DB" || "$DB" =~ ^# ]] && continue
 
   echo ""
-  echo "----- Database: $DB -----"
+  echo "----- Processing DB: $DB -----"
 
   PMON=$(pgrep -f "pmon_${DB}" || true)
   if [[ -z "$PMON" ]]; then
-    log "DB $DB not running – skipping"
+    log "DB $DB not running — skipping"
     continue
   fi
 
@@ -25,9 +24,9 @@ while IFS=':' read -r DB ORACLE_HOME Y; do
   export ORACLE_SID="$DB"
   export PATH="$ORACLE_HOME/bin:$PATH"
 
-  #############################################################
-  # 1) LOCAL_LISTENER
-  #############################################################
+  #################################################################
+  # 1) Read LOCAL_LISTENER
+  #################################################################
   LL=$(sqlplus -s / as sysdba <<EOF
 set pages 0 feedback off heading off echo off
 select value from v\\$parameter where name='local_listener';
@@ -37,76 +36,78 @@ EOF
   log "LOCAL_LISTENER = '$LL'"
 
   if [[ -z "$LL" ]]; then
-    log "No LOCAL_LISTENER – skipping DB"
+    log "No LOCAL_LISTENER — skipping"
     continue
   fi
 
-  #############################################################
-  # 2) Get service names for this DB
-  #############################################################
+  #################################################################
+  # 2) Extract services
+  #################################################################
   SVC_RAW=$(sqlplus -s / as sysdba <<EOF
 set pages 0 feedback off heading off echo off
 select name from v\\$services order by name;
 EOF
   )
   SERVICES=$(echo "$SVC_RAW" | sed '/^$/d')
-
   if [[ -z "$SERVICES" ]]; then
-    log "No services for DB – skipping"
+    log "No services returned — skipping"
     continue
   fi
 
-  log "Services:"
-  while read -r svc; do log "  - $svc"; done <<< "$SERVICES"
-
-  #############################################################
-  # 3) Derive listener port
-  #############################################################
-
+  #################################################################
+  # 3) Determine PORT from LOCAL_LISTENER
+  #################################################################
   PORT=""
-  LSN_PID=""
 
-  # Case 1: LOCAL_LISTENER contains an explicit PORT
+  ## Case A: LOCAL_LISTENER includes explicit PORT=
   if [[ "$LL" =~ PORT=([0-9]+) ]]; then
     PORT="${BASH_REMATCH[1]}"
-    log "Extracted PORT from LOCAL_LISTENER → $PORT"
+    log "Extracted port directly from LOCAL_LISTENER → $PORT"
+
+  ## Case B: LOCAL_LISTENER is a TNS alias e.g. LISTENER_DB1
   else
-    # Case 2: LOCAL_LISTENER is a listener name (e.g., LISTENER_DB1)
-    LIST_NAME=$(echo "$LL" | sed 's/(.*//; s/ .*//')
-    log "Treating LOCAL_LISTENER as listener name: $LIST_NAME"
+    LNAME="$LL"
+    log "LOCAL_LISTENER appears to be listener alias → $LNAME"
 
-    LSN_PID=$(ps -eo pid,args | awk -v pat="$LIST_NAME" '/tnslsnr/ && $0 ~ pat {print $1}' | head -n 1)
-    log "Listener PID guess: $LSN_PID"
+    # Find listener PID based on command line matching the alias
+    LPID=$(ps -eo pid,args | awk -v ln="$LNAME" '/tnslsnr/ && $0 ~ ln {print $1}' | head -n 1)
 
-    if [[ -n "$LSN_PID" ]]; then
-      if command -v ss >/dev/null 2>&1; then
-        PORT=$(ss -ltnp | awk -v pid="$LSN_PID" '$0 ~ "pid=" pid "," {split($4,a,":"); print a[length(a)]}' | head -n 1)
-      else
-        PORT=$(netstat -ltnp | awk -v pid="$LSN_PID" '$0 ~ pid"/" {split($4,a,":"); print a[length(a)]}' | head -n 1)
-      fi
-      log "Discovered port from PID=$LSN_PID → $PORT"
+    if [[ -z "$LPID" ]]; then
+      log "Listener alias '$LNAME' not found in running processes — skipping DB"
+      continue
     fi
+    log "Listener alias '$LNAME' corresponds to PID $LPID"
+
+    # Derive port from listener PID via ss/netstat
+    if command -v ss >/dev/null 2>&1; then
+      PORT=$(ss -ltnp | awk -v pid="$LPID" '$0 ~ "pid=" pid "," {split($4,a,":"); print a[length(a)]}' | head -n 1)
+    else
+      PORT=$(netstat -ltnp | awk -v pid="$LPID" '$0 ~ pid"/" {split($4,a,":"); print a[length(a)]}' | head -n 1)
+    fi
+
+    log "Listener PID $LPID → PORT $PORT"
   fi
 
   if [[ -z "$PORT" ]]; then
-    log "Could not determine listener PORT – skipping DB"
+    log "Could not determine port — skipping DB"
     continue
   fi
 
-  #############################################################
-  # Create endpoints for this DB
-  #############################################################
+  #################################################################
+  # 4) Build endpoint(s)
+  #################################################################
   for svc in $SERVICES; do
     EP="${HOST}:${PORT}/${svc}"
-    log "Adding endpoint → $EP"
+    log "Adding endpoint $EP"
     ENDPOINTS["$EP"]=1
   done
 
 done < /etc/oratab
 
-#############################################################
-# Build JSON
-#############################################################
+
+#################################################################
+# 5) Build JSON payload
+#################################################################
 PAYLOAD="[]"
 for ep in "${!ENDPOINTS[@]}"; do
   PAYLOAD=$(printf '%s' "$PAYLOAD" | jq --arg ep "$ep" '. += [$ep]')
@@ -114,9 +115,6 @@ done
 
 FINAL_JSON=$(jq -n --arg host "$HOST" --argjson data "$PAYLOAD" '{($host): $data}')
 
-echo "----- Final JSON Payload -----"
+echo ""
+echo "===== FINAL JSON ====="
 echo "$FINAL_JSON"
-echo "===== END RUN ====="
-
-# POST (optional):
-# curl -s -X POST -H "Content-Type: application/json" -d "$FINAL_JSON" "$API_URL"
