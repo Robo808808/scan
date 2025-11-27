@@ -1,7 +1,8 @@
 #!/bin/bash
 #
 # Discover Oracle "public" CDB root services per database and POST
-# them to a FastAPI collector in JSON form: { "hostname": [ "host:port/service" ] }
+# them to a FastAPI collector in JSON form:
+# { "hostname": [ "host:port/service" , ... ] }
 #
 
 API_URL="https://central.server.example.com/collect/oracle/endpoints"
@@ -14,55 +15,53 @@ if ! command -v jq >/dev/null 2>&1; then
   exit 1
 fi
 
-declare -A DB_ENDPOINTS  # map of "host:port/service" unique
-
 #############################################
-# STEP 1 — Identify listeners with ports AND their DB instances
+# STEP 1 — discover all listener ports via ss/netstat
 #############################################
 
-declare -A LISTENER_PORTS
-declare -A LISTENER_INSTANCES   # LISTENER_INSTANCES["LISTENER1"]="db1 db2"
+GLOBAL_PORTS=()
 
-while read -r PID CMDLINE; do
-  LNAME=$(echo "$CMDLINE" | awk '{print $2}')
-  [[ -z "$LNAME" ]] && continue
+if command -v ss >/dev/null 2>&1; then
+  while read -r port; do
+    [[ -n "$port" ]] && GLOBAL_PORTS+=("$port")
+  done < <(ss -ltnp 2>/dev/null \
+           | awk '/tnslsnr/ && /LISTEN/ {
+                    split($4,a,":");
+                    p=a[length(a)];
+                    if (p ~ /^[0-9]+$/) print p
+                  }' | sort -u)
+else
+  while read -r port; do
+    [[ -n "$port" ]] && GLOBAL_PORTS+=("$port")
+  done < <(netstat -ltnp 2>/dev/null \
+           | awk '/tnslsnr/ && /LISTEN/ {
+                    split($4,a,":");
+                    p=a[length(a)];
+                    if (p ~ /^[0-9]+$/) print p
+                  }' | sort -u)
+fi
 
-  # Find ports
-  if command -v ss >/dev/null 2>&1; then
-    PORTS=$(ss -ltnp 2>/dev/null | awk -v pid="$PID" '
-      $0 ~ "pid=" pid "," {
-        split($4,a,":"); port=a[length(a)];
-        if (port ~ /^[0-9]+$/) print port;
-      }')
-  else
-    PORTS=$(netstat -ltnp 2>/dev/null | awk -v pid="$PID" '
-      $0 ~ "LISTEN" && $0 ~ pid"/" {
-        split($4,a,":"); port=a[length(a)];
-        if (port ~ /^[0-9]+$/) print port;
-      }')
-  fi
-  [[ -n "$PORTS" ]] && LISTENER_PORTS["$LNAME"]=$(echo "$PORTS" | sort -u)
-
-  # Parse DB instances registered with this listener
-  STATUS=$(lsnrctl status "$LNAME" 2>/dev/null)
-  INSTS=$(echo "$STATUS" | awk '
-    /Instance "/ {
-      gsub(/"/,"",$2);
-      inst=$2
-      print inst
-    }')
-  [[ -n "$INSTS" ]] && LISTENER_INSTANCES["$LNAME"]=$(echo "$INSTS" | sort -u)
-
-done < <(ps -eo pid,args | awk '/tnslsnr/ && !/awk/ && !/grep/ {pid=$1; $1=""; print pid, $0}')
+if [[ ${#GLOBAL_PORTS[@]} -eq 0 ]]; then
+  echo "$(date) WARNING: no listener ports discovered via ss/netstat on $HOST" >> "$LOG"
+fi
 
 #############################################
-# STEP 2 — Loop /etc/oratab & link DB to its listener ports
+# STEP 2 — loop /etc/oratab, per-DB discover:
+#   - is DB up?
+#   - LOCAL_LISTENER port (if any)
+#   - filtered root services
 #############################################
+
+declare -A ENDPOINTS   # unique map: "host:port/service" → 1
 
 while IFS=':' read -r DB ORACLE_HOME Y; do
+  # Skip comments/blank lines
   [[ "$DB" =~ ^# || -z "$DB" ]] && continue
 
-  # Check PMON running → DB is up
+  # Skip ASM if present (optional)
+  # [[ "$DB" == *"+"* ]] && continue
+
+  # Check DB is running via PMON
   if ! ps -ef | grep -q "[p]mon_${DB}"; then
     echo "$(date) DB $DB not running — skipping" >> "$LOG"
     continue
@@ -72,28 +71,32 @@ while IFS=':' read -r DB ORACLE_HOME Y; do
   export ORACLE_SID="$DB"
   export PATH="$ORACLE_HOME/bin:$PATH"
 
-  # Determine which listener(s) serve this DB
-  DB_LISTENER_PORTS=()
-  for L in "${!LISTENER_INSTANCES[@]}"; do
-    for inst in ${LISTENER_INSTANCES[$L]}; do
-      [[ "$inst" == "$DB" ]] || continue
-      for port in ${LISTENER_PORTS[$L]}; do
-        DB_LISTENER_PORTS+=("$port")
-      done
-    done
-  done
+  #########################
+  # 2a — get LOCAL_LISTENER
+  #########################
+  LL_RAW=$(sqlplus -s / as sysdba <<'EOF'
+set pages 0 feedback off heading off verify off echo off
+select value from v$parameter where name = 'local_listener';
+EOF
+)
+  LOCAL_LISTENER=$(printf "%s\n" "$LL_RAW" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//' | sed '/^$/d' | head -n1)
 
-  # If no listener claims the DB → fallback = all listener ports?
-  if [[ ${#DB_LISTENER_PORTS[@]} -eq 0 ]]; then
-    for L in "${!LISTENER_PORTS[@]}"; do
-      for port in ${LISTENER_PORTS[$L]}; do
-        DB_LISTENER_PORTS+=("$port")
-      done
-    done
+  DB_PORTS=()
+
+  # If LOCAL_LISTENER contains an explicit PORT, extract it
+  if [[ "$LOCAL_LISTENER" =~ PORT[[:space:]]*=[[:space:]]*([0-9]+) ]]; then
+    DB_PORTS+=("${BASH_REMATCH[1]}")
   fi
 
-  # Get filtered root-container services (all of them, not just one)
-  SQL_OUT=$(sqlplus -s / as sysdba <<'EOF'
+  # If we still have no port for this DB, fall back to all discovered ports
+  if [[ ${#DB_PORTS[@]} -eq 0 ]]; then
+    DB_PORTS=("${GLOBAL_PORTS[@]}")
+  fi
+
+  #########################
+  # 2b — get filtered root services for this DB
+  #########################
+  SQL_SVC=$(sqlplus -s / as sysdba <<'EOF'
 set pages 0 feedback off heading off verify off echo off
 SELECT name
 FROM v$services
@@ -106,27 +109,33 @@ WHERE network_name IS NOT NULL
   AND name NOT LIKE 'PDB$SEED%'
 ORDER BY name;
 EOF
-  )
+)
+  SERVICES=$(printf "%s\n" "$SQL_SVC" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//' | sed '/^$/d')
 
-  SERVICES=$(printf "%s\n" "$SQL_OUT" | sed '/^$/d')
-  [[ -z "$SERVICES" ]] && continue
+  if [[ -z "$SERVICES" ]]; then
+    echo "$(date) No filtered services returned for $DB on $HOST" >> "$LOG"
+    continue
+  fi
 
-  # Combine DB-matching listener ports + all (filtered) services
-  for port in "${DB_LISTENER_PORTS[@]}"; do
+  #########################
+  # 2c — build endpoints
+  #########################
+  for port in "${DB_PORTS[@]}"; do
+    [[ -z "$port" ]] && continue
     for svc in $SERVICES; do
       ep="${HOST}:${port}/${svc}"
-      DB_ENDPOINTS["$ep"]=1
+      ENDPOINTS["$ep"]=1
     done
   done
 
 done < /etc/oratab
 
 #############################################
-# STEP 3 — Build JSON + POST
+# STEP 3 — build JSON + POST
 #############################################
 
 PAYLOAD="[]"
-for ep in "${!DB_ENDPOINTS[@]}"; do
+for ep in "${!ENDPOINTS[@]}"; do
   PAYLOAD=$(printf '%s\n' "$PAYLOAD" | jq -c --arg ep "$ep" '. += [$ep]')
 done
 
